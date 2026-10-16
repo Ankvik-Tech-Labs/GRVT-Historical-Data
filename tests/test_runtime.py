@@ -118,7 +118,7 @@ if [[ $1 == -l ]]; then cat {str(crontab)!r}; else cp "$1" {str(crontab)!r}; fi
         (ROOT / "scripts/install-vitalik8.sh")
         .read_text()
         .replace("/home/avik/GRVT-Historical-Data", str(deploy))
-        .replace("/home/avik/.local/share/grvt-historical-data", str(data))
+        .replace("/srv/grvt", str(data))
         .replace("/usr/sbin/logrotate", str(fake / "logrotate"))
     )
     script = executable(tmp_path / "install.sh", source)
@@ -140,6 +140,8 @@ def test_installer_preserves_unrelated_cron_backs_up_and_replaces_idempotently(
     assert "stale" not in installed
     assert installed.count("# BEGIN grvt-data-daily") == 1
     assert "30 0 * * * " in installed and "*/5 * * * * " in installed
+    assert "run-daily.sh --datasets trades >>" in installed
+    assert "status --check --datasets trades >>" in installed
     assert "CRON_TZ" not in installed and "TZ=" not in installed
     assert "flock" not in installed
     assert next((data / "state").glob("crontab-*.backup")).read_text() == old
@@ -211,6 +213,8 @@ def test_compose_only_mounts_data_and_no_github_credentials():
             "compose",
             "-f",
             str(ROOT / "docker/compose.yml"),
+            "--profile",
+            "depth",
             "config",
             "--format",
             "json",
@@ -222,12 +226,30 @@ def test_compose_only_mounts_data_and_no_github_credentials():
     assert result.returncode == 0, result.stderr
     config = json.loads(result.stdout)["services"]["depth"]
     assert [v["target"] for v in config["volumes"]] == ["/data"]
+    assert config["profiles"] == ["depth"]
+    assert config["volumes"][0]["source"] == "/srv/grvt"
     assert config["restart"] == "unless-stopped"
     assert config["user"] == "1000:1000"
     assert not config.get("environment")
     assert config["stop_grace_period"] == "1m0s"
     script = (ROOT / "scripts/run-daily.sh").read_text()
     assert " publish " not in script and "flock" not in script
+    assert '--data-dir "$DATA" --datasets trades' in script
+    default = subprocess.run(
+        [
+            "docker",
+            "compose",
+            "-f",
+            str(ROOT / "docker/compose.yml"),
+            "config",
+            "--format",
+            "json",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert json.loads(default.stdout)["services"] == {}
 
 
 def test_outer_runtime_propagates_normal_exit():

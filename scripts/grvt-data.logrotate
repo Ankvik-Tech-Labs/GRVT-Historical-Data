@@ -1,4 +1,4 @@
-/home/avik/.local/share/grvt-historical-data/logs/daily.log /home/avik/.local/share/grvt-historical-data/logs/status.log {
+/srv/grvt/logs/daily.log /srv/grvt/logs/status.log {
     weekly
     rotate 8
     compress

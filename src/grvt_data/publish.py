@@ -501,6 +501,10 @@ def prune_verified(
                     for directory in protected_trade_directories
                 ):
                     continue
+                # Canonical Parquet is the durable local target, alongside the
+                # release. Page envelopes are transient after verified commit.
+                if path.name == "trades.parquet":
+                    continue
                 if path.exists():
                     path.unlink()
                     removed.append(path)

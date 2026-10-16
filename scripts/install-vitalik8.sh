@@ -5,7 +5,7 @@ set -euo pipefail
 ZONE=$(timedatectl show -p Timezone --value)
 [[ $ZONE == UTC || $ZONE == Etc/UTC ]] || { echo 'refusing: live system timezone must be UTC' >&2; exit 1; }
 ROOT=/home/avik/GRVT-Historical-Data
-DATA=/home/avik/.local/share/grvt-historical-data
+DATA=/srv/grvt
 USER_LOGROTATE=0
 if [[ ${1:-} == --user-logrotate && $# == 1 ]]; then
     USER_LOGROTATE=1
@@ -34,8 +34,8 @@ END { if (inside) exit 2 }
 # so their original scope stays intact and cannot move our UTC firing time.
 cat > "$TEMP/new" <<'CRON'
 # BEGIN grvt-data-daily
-30 0 * * * /home/avik/GRVT-Historical-Data/scripts/run-daily.sh >> /home/avik/.local/share/grvt-historical-data/logs/daily.log 2>&1
-*/5 * * * * /home/avik/GRVT-Historical-Data/.venv/bin/grvt-data status --check >> /home/avik/.local/share/grvt-historical-data/logs/status.log 2>&1
+30 0 * * * /home/avik/GRVT-Historical-Data/scripts/run-daily.sh --datasets trades >> /srv/grvt/logs/daily.log 2>&1
+*/5 * * * * /home/avik/GRVT-Historical-Data/.venv/bin/grvt-data status --check --datasets trades >> /srv/grvt/logs/status.log 2>&1
 CRON
 if [[ $USER_LOGROTATE == 1 ]]; then
     [[ -x /usr/sbin/logrotate ]] || { echo 'logrotate missing' >&2; exit 1; }

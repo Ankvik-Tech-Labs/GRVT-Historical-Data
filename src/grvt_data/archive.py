@@ -106,15 +106,16 @@ def pending_dates(config: Config, today: date) -> set[date]:
         latest[day] = row
         if row["status"] != "committed":
             pending.add(day)
-    for path in (config.data_dir / "raw" / "depth").glob("*/*.frames"):
-        if str(path.relative_to(config.data_dir)) not in reserved:
-            pending.add(date.fromisoformat(path.parent.name))
-    for path in (config.data_dir / "state" / "outages").glob("*.json"):
-        journal = json.loads(path.read_text())
-        if json.dumps(journal, sort_keys=True) not in known_journals:
-            parent = Path(journal["segment"]).parent
-            if parent.parent == Path("raw/depth"):
-                pending.add(date.fromisoformat(parent.name))
+    if config.depth_enabled:
+        for path in (config.data_dir / "raw" / "depth").glob("*/*.frames"):
+            if str(path.relative_to(config.data_dir)) not in reserved:
+                pending.add(date.fromisoformat(path.parent.name))
+        for path in (config.data_dir / "state" / "outages").glob("*.json"):
+            journal = json.loads(path.read_text())
+            if json.dumps(journal, sort_keys=True) not in known_journals:
+                parent = Path(journal["segment"]).parent
+                if parent.parent == Path("raw/depth"):
+                    pending.add(date.fromisoformat(parent.name))
     for day, row in latest.items():
         if (
             row["manifest_json"]
@@ -158,7 +159,7 @@ def _validate_request(config, day, report, end_ns, allow_today):
         raise ValueError("trade report window identity mismatch")
     _validate_query_provenance(config, report, start, cutoff)
     receipt = None
-    if allow_today:
+    if allow_today and config.depth_enabled:
         receipt = json.loads(
             (config.data_dir / "state" / "depth-checkpoint.json").read_text()
         )
@@ -217,7 +218,11 @@ def _metadata(config, day, deadline):
     path = config.data_dir / "state" / "discovery" / f"{day}.json"
     discovery = json.loads(path.read_text()) if path.exists() else {"instruments": []}
     journals = []
-    for path in sorted((config.data_dir / "state" / "outages").glob("*.json")):
+    for path in (
+        sorted((config.data_dir / "state" / "outages").glob("*.json"))
+        if config.depth_enabled
+        else []
+    ):
         remaining_seconds(deadline)
         payload = json.loads(path.read_text())
         if Path(payload.get("segment", "")).parent == Path("raw/depth") / str(day):
@@ -251,6 +256,7 @@ def seal_revision(
                 (str(day),),
             ).fetchone()[0]
             request = {
+                "datasets": list(config.datasets),
                 "trade_report": trade_report,
                 "receipt": receipt,
                 "end_ns": end_ns,
@@ -272,8 +278,10 @@ def seal_revision(
                 if receipt
                 else set()
             )
-            for path in sorted(
-                (config.data_dir / "raw" / "depth" / str(day)).glob("*.frames")
+            for path in (
+                sorted((config.data_dir / "raw" / "depth" / str(day)).glob("*.frames"))
+                if config.depth_enabled
+                else []
             ):
                 remaining_seconds(deadline)
                 identity = str(path.relative_to(config.data_dir))
@@ -574,6 +582,8 @@ def resume_revision(config: Config, day: date, revision: int, *, deadline=None) 
             return bundle
         request = json.loads(row["request_json"])
         report, cap = request["trade_report"], request["part_bytes"]
+        # Historical requests predate datasets and always captured both.
+        depth_enabled = "depth" in request.get("datasets", ["trades", "depth"])
         _validate_query_provenance(config, report, report["start_ns"], report["end_ns"])
         bundle.mkdir(parents=True, exist_ok=True)
         for temp in bundle.rglob(".*.tmp"):
@@ -619,16 +629,21 @@ def resume_revision(config: Config, day: date, revision: int, *, deadline=None) 
             depth_entries.extend(state["entries"])
         discovery = request["discovery"]
         recovery_journals = request["recovery_journals"]
-        for payload in recovery_journals:
-            remaining_seconds(deadline)
-            name = Path(payload["segment"]).stem + ".json"
-            target = bundle / "entries" / "depth" / "outages" / name
-            write_json_atomic(target, payload)
-            depth_entries.append(_record(target, bundle, deadline))
-        metadata_path = bundle / "entries" / "depth" / "discovery.json"
-        write_json_atomic(metadata_path, discovery)
-        depth_entries.append(_record(metadata_path, bundle, deadline))
+        if depth_enabled:
+            for payload in recovery_journals:
+                remaining_seconds(deadline)
+                name = Path(payload["segment"]).stem + ".json"
+                target = bundle / "entries" / "depth" / "outages" / name
+                write_json_atomic(target, payload)
+                depth_entries.append(_record(target, bundle, deadline))
+            metadata_path = bundle / "entries" / "depth" / "discovery.json"
+            write_json_atomic(metadata_path, discovery)
+            depth_entries.append(_record(metadata_path, bundle, deadline))
         trade_entries, inputs = [], []
+        if not depth_enabled:
+            metadata_path = bundle / "entries" / "trades" / "discovery.json"
+            write_json_atomic(metadata_path, discovery)
+            trade_entries.append(_record(metadata_path, bundle, deadline))
         instrument_states = copy.deepcopy(report["instruments"])
         for item in discovery["instruments"]:
             instrument_states.setdefault(
@@ -680,38 +695,46 @@ def resume_revision(config: Config, day: date, revision: int, *, deadline=None) 
             "depth": "received_ns",
             "trades": "exchange event_time",
         }
-        manifest["depth"]["assets"].extend(depth_assets)
-        manifest["depth"]["segments"].extend(s["identity"] for s in segments)
-        manifest["depth"]["segment_records"].extend(segments)
-        manifest["depth"]["status"] = (
-            "partial" if manifest["depth"]["segments"] else "unavailable"
-        )
-        manifest["depth"]["coverage_note"] = (
-            "Only captured segments; uncaptured and uncertain intervals are unavailable. No historical depth backfill."
-        )
-        manifest["depth"]["rate_ms"] = config.depth_rate_ms
-        coverage = manifest["depth"].setdefault("instruments", {})
-        for item in discovery["instruments"]:
-            coverage.setdefault(
-                item["instrument"], {"status": "unavailable", "segments": []}
+        manifest["datasets"] = request.get("datasets", ["trades", "depth"])
+        if depth_enabled:
+            manifest["depth"]["assets"].extend(depth_assets)
+            manifest["depth"]["segments"].extend(s["identity"] for s in segments)
+            manifest["depth"]["segment_records"].extend(segments)
+            manifest["depth"]["status"] = (
+                "partial" if manifest["depth"]["segments"] else "unavailable"
             )
-        for segment in segments:
-            for instrument, state in segment["instruments"].items():
-                current = coverage.setdefault(
-                    instrument, {"status": "partial", "segments": []}
+            manifest["depth"]["coverage_note"] = (
+                "Only captured segments; uncaptured and uncertain intervals are unavailable. No historical depth backfill."
+            )
+            manifest["depth"]["rate_ms"] = config.depth_rate_ms
+            coverage = manifest["depth"].setdefault("instruments", {})
+            for item in discovery["instruments"]:
+                coverage.setdefault(
+                    item["instrument"], {"status": "unavailable", "segments": []}
                 )
-                current["segments"].append({"identity": segment["identity"], **state})
-                # No union of partial/unavailable/uncertain intervals proves full
-                # day coverage; uncertainties remain visible in each segment.
-                current["status"] = (
-                    "uncertain"
-                    if any(s["status"] == "uncertain" for s in current["segments"])
-                    else "partial"
-                )
-        manifest["depth"].setdefault("recovery_journals", []).extend(recovery_journals)
-        manifest["depth"].setdefault("files", []).append(
-            {"revision": revision, "entries": depth_entries}
-        )
+            for segment in segments:
+                for instrument, state in segment["instruments"].items():
+                    current = coverage.setdefault(
+                        instrument, {"status": "partial", "segments": []}
+                    )
+                    current["segments"].append(
+                        {"identity": segment["identity"], **state}
+                    )
+                    # No union of partial/unavailable/uncertain intervals proves full
+                    # day coverage; uncertainties remain visible in each segment.
+                    current["status"] = (
+                        "uncertain"
+                        if any(s["status"] == "uncertain" for s in current["segments"])
+                        else "partial"
+                    )
+            manifest["depth"].setdefault("recovery_journals", []).extend(
+                recovery_journals
+            )
+            manifest["depth"].setdefault("files", []).append(
+                {"revision": revision, "entries": depth_entries}
+            )
+        elif not prior:
+            manifest["depth"]["status"] = "disabled"
         manifest["trades"].setdefault("files", []).append(
             {"revision": revision, "entries": trade_entries}
         )
@@ -758,7 +781,11 @@ def resume_revision(config: Config, day: date, revision: int, *, deadline=None) 
             provisional=not bool(full),
             latest_report=report,
             instruments=instrument_states,
-            cutoff_note="receive-clock approximation of exchange bound; full-day re-download required"
+            cutoff_note=(
+                "receive-clock approximation of exchange bound; full-day re-download required"
+                if depth_enabled
+                else "explicit exchange-time bound; full-day re-download required"
+            )
             if request["allow_today"]
             else "exchange-time UTC day",
         )

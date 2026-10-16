@@ -67,9 +67,8 @@ def write_json_atomic(path: Path, payload: dict) -> None:
 
 
 def write_parquet_atomic(path: Path, rows: list[dict], schema: pa.Schema) -> None:
-    _atomic(
-        path,
-        lambda temp: pq.write_table(
+    def write(temp):
+        pq.write_table(
             pa.Table.from_pylist(rows, schema=schema),
             temp,
             compression="zstd",
@@ -79,8 +78,12 @@ def write_parquet_atomic(path: Path, rows: list[dict], schema: pa.Schema) -> Non
             use_dictionary=True,
             write_statistics=True,
             row_group_size=65536,
-        ),
-    )
+        )
+        # /srv/grvt's setgid directories supply the consumer group. Atomic
+        # mkstemp defaults to 0600, so grant group access before replacement.
+        temp.chmod(0o660)
+
+    _atomic(path, write)
 
 
 # Each frame is independently zlib-compressed: uint32 length, uint32 CRC32,

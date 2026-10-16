@@ -21,7 +21,7 @@ from pathlib import Path
 from .api import GrvtAPI
 from .archive import pending_dates, resume_revision, retry_status, seal_revision
 from .config import Config, DeadlineExceeded
-from .depth import collect_depth, depth_control
+from .depth import collect_depth, depth_control, persist_discovery
 from .publish import GitHub, prune_if_critical, prune_verified, publish_revision
 from .storage import (
     disk_status,
@@ -33,7 +33,7 @@ from .storage import (
 )
 from .trades import day_universe, download_trades, window_bounds
 
-DEFAULT_ROOT = Path("/home/avik/.local/share/grvt-historical-data")
+DEFAULT_ROOT = Path("/srv/grvt")
 
 
 def utc_today():
@@ -146,9 +146,12 @@ def run_date(config, day, *, deadline, end_ns=None, publish_only=False):
     ) or (end_ns is None and day in pending_dates(config, utc_today())):
         api = GrvtAPI(config, deadline=deadline)
         try:
-            instruments = day_universe(
-                config.data_dir, day, api.instruments(active=True)
-            )
+            discovered = api.instruments(active=True)
+            instruments = day_universe(config.data_dir, day, discovered)
+            if not config.depth_enabled:
+                # The depth service used to retain discovery. Tick-only runs
+                # own this metadata boundary before any instrument downloads.
+                persist_discovery(config.data_dir, day, discovered)
             report = download_trades(
                 api, config.data_dir, day, instruments, end_ns=end_ns
             )
@@ -312,13 +315,14 @@ def daily(
                 raise ValueError(
                     "--end-time-ns must be within today and not in the future"
                 )
-            receipt = json.loads(
-                (config.data_dir / "state/depth-checkpoint.json").read_text()
-            )
-            if receipt["cutoff_received_ns"] != end_ns:
-                raise ValueError(
-                    "--end-time-ns must match persisted rotate-now receipt"
+            if config.depth_enabled:
+                receipt = json.loads(
+                    (config.data_dir / "state/depth-checkpoint.json").read_text()
                 )
+                if receipt["cutoff_received_ns"] != end_ns:
+                    raise ValueError(
+                        "--end-time-ns must match persisted rotate-now receipt"
+                    )
             targets = [today]
         elif end_ns is not None:
             raise ValueError("--end-time-ns requires --allow-today")
@@ -379,7 +383,9 @@ def status(config, *, check=False):
     now = time.time_ns()
     heartbeat_path = config.data_dir / "state/depth-status.json"
     heartbeat = (
-        json.loads(heartbeat_path.read_text()) if heartbeat_path.exists() else {}
+        json.loads(heartbeat_path.read_text())
+        if config.depth_enabled and heartbeat_path.exists()
+        else {}
     )
     age = (now - heartbeat["received_ns"]) / 1e9 if heartbeat else None
     disk = disk_status(config.data_dir, config)
@@ -393,6 +399,7 @@ def status(config, *, check=False):
             "websocket_ping_timeout_seconds": 20,
             "instruments": heartbeat.get("instruments", {}),
         },
+        "datasets": list(config.datasets),
         "disk": disk,
         "revisions": _local_rows(config),
         "date_runs": _local_rows(config, attempts=True),
@@ -405,6 +412,14 @@ def status(config, *, check=False):
         "release_counts_source": "last remote observation; absent means unknown",
         "cleanup": "not requested",
     }
+    if not config.depth_enabled:
+        result["collector"] = {
+            "enabled": False,
+            "status": "disabled",
+            "reason": "tick-only datasets; no depth collector required",
+        }
+    else:
+        result["collector"]["enabled"] = True
     if check and disk["cleanup_requested"]:
         with publication_lock(config, 0) as fd:
             if fd is None:
@@ -462,6 +477,11 @@ def main(argv=None):
     for name in ("depth", "daily", "publish", "rotate-now", "status"):
         command = commands.add_parser(name)
         command.add_argument("--data-dir", type=Path, default=DEFAULT_ROOT)
+        command.add_argument(
+            "--datasets",
+            choices=("trades", "trades,depth"),
+            default="trades,depth" if name in ("depth", "rotate-now") else "trades",
+        )
         if name in ("daily", "publish"):
             command.add_argument("--repo", default=Config.repo)
             command.add_argument("--lock-wait-seconds", type=positive, default=60)
@@ -478,6 +498,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
     config = Config(
         data_dir=args.data_dir.resolve(),
+        datasets=tuple(args.datasets.split(",")),
         repo=getattr(args, "repo", Config.repo),
         per_date_deadline_seconds=getattr(args, "per_date_deadline_seconds", 3600),
     )
@@ -486,8 +507,12 @@ def main(argv=None):
     )
     try:
         if args.command == "depth":
+            if not config.depth_enabled:
+                raise ValueError("depth command requires --datasets trades,depth")
             asyncio.run(collect_depth(config))
         elif args.command == "rotate-now":
+            if not config.depth_enabled:
+                raise ValueError("rotate-now requires --datasets trades,depth")
             receipt = asyncio.run(depth_control(config.data_dir, "rotate_now"))
             print(json.dumps(receipt, sort_keys=True))
             print(receipt["cutoff_received_ns"])

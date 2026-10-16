@@ -30,6 +30,17 @@ class Config:
     archive_part_bytes: int = 1024**3 - 1
     release_asset_cap: int = 1000
     trade_indexing_lag_seconds: float = 30.0
+    datasets: tuple[str, ...] = ("trades", "depth")
+
+    def __post_init__(self):
+        # JSON worker payloads contain lists; normalize them at the boundary.
+        object.__setattr__(self, "datasets", tuple(self.datasets))
+        if self.datasets not in (("trades",), ("trades", "depth")):
+            raise ValueError("datasets must be trades or trades,depth")
+
+    @property
+    def depth_enabled(self):
+        return "depth" in self.datasets
 
 
 class DeadlineExceeded(TimeoutError):
