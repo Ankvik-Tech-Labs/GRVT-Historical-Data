@@ -147,7 +147,9 @@ class GitHub:
         )
 
     def patch(self, release, *, body=None, draft=None):
-        payload = {}
+        # Preserve a draft's requested tag even before that Git ref exists.
+        # Omitting it on PATCH can replace it with GitHub's untagged-* identity.
+        payload = {"tag_name": release["tag_name"]}
         if body is not None:
             payload["body"] = body
         if draft is not None:

@@ -183,6 +183,13 @@ def test_retry_after_draft_creation_without_tag_reuses_actual_release(
         raise Crash()
 
     def run(args, **kwargs):
+        if "PATCH" in args:
+            payload = kwargs["payload"]
+            gh.calls.append(("patch", payload))
+            # The live API changed a missing draft tag on a body-only PATCH.
+            gh.state.update(payload)
+            gh.state["tag_name"] = payload.get("tag_name", "untagged-live-repro")
+            return copy.deepcopy(gh.state)
         if "/releases/tags/" in args[1]:
             return (
                 copy.deepcopy(gh.state) if gh.state and not gh.state["draft"] else None
@@ -194,6 +201,9 @@ def test_retry_after_draft_creation_without_tag_reuses_actual_release(
 
     monkeypatch.setattr(gh, "_run", run, raising=False)
     monkeypatch.setattr(gh, "release", lambda day: GitHub.release(gh, day))
+    monkeypatch.setattr(
+        gh, "patch", lambda release, **kw: GitHub.patch(gh, release, **kw)
+    )
     monkeypatch.setattr(gh, "create", create_and_crash)
     with pytest.raises(Crash):
         publish_revision(config, DAY, 1, github=gh)
@@ -201,6 +211,7 @@ def test_retry_after_draft_creation_without_tag_reuses_actual_release(
     monkeypatch.setattr(gh, "create", original_create)
     assert publish_revision(config, DAY, 1, github=gh)["status"] == "committed"
     assert gh.state["id"] == 100
+    assert gh.state["tag_name"] == f"data-{DAY}"
     assert sum(call[0] == "create" for call in gh.calls) == 1
 
 
@@ -528,7 +539,10 @@ def test_hash_stream_deadline_kills_trickling_process(tmp_path, monkeypatch):
     assert processes[0].poll() is not None
 
 
-def test_gh_json_payload_preserves_newlines_and_inherited_lock(tmp_path, monkeypatch):
+@pytest.mark.parametrize("draft", [None, False])
+def test_gh_json_payload_preserves_tag_newlines_and_inherited_lock(
+    tmp_path, monkeypatch, draft
+):
     import os
     import subprocess
 
@@ -550,11 +564,16 @@ def test_gh_json_payload_preserves_newlines_and_inherited_lock(tmp_path, monkeyp
 
     try:
         GitHub(Config(data_dir=tmp_path), deadline=time.monotonic() + 0.9).patch(
-            {"id": 42}, body="literal\nnext `line` $(text)"
+            {"id": 42, "tag_name": "data-2026-10-15"},
+            body="literal\nnext `line` $(text)",
+            draft=draft,
         )
     finally:
         os.close(descriptor)
-    assert seen == [{"body": "literal\nnext `line` $(text)"}]
+    expected = {"tag_name": "data-2026-10-15", "body": "literal\nnext `line` $(text)"}
+    if draft is not None:
+        expected["draft"] = draft
+    assert seen == [expected]
 
 
 def test_gh_release_reads_all_asset_pages(tmp_path, monkeypatch):
