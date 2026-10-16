@@ -16,6 +16,23 @@ class Crash(BaseException):
     pass
 
 
+@pytest.mark.parametrize("payload", [b'[\n{"id":1}\n]\n[{"id":2}]\n[]\n', b"[]\n"])
+def test_gh_paginate_without_slurp_decodes_every_json_page(
+    tmp_path, monkeypatch, payload
+):
+    import subprocess
+
+    def run(command, **kwargs):
+        assert "--slurp" not in command
+        return subprocess.CompletedProcess(command, 0, payload, b"")
+
+    monkeypatch.setattr("grvt_data.publish.subprocess.run", run)
+    pages = GitHub(Config(data_dir=tmp_path))._run(
+        ["api", "repos/example/releases", "--paginate"]
+    )
+    assert pages == ([[{"id": 1}], [{"id": 2}], []] if b'"id"' in payload else [[]])
+
+
 def test_gh_finds_draft_before_tag_exists_and_reads_all_assets(tmp_path, monkeypatch):
     gh = GitHub(Config(data_dir=tmp_path))
     calls = []
@@ -26,7 +43,7 @@ def test_gh_finds_draft_before_tag_exists_and_reads_all_assets(tmp_path, monkeyp
             assert kwargs["absent"]
             return None  # Live GitHub returns 404 until a draft's tag exists.
         if args[1].endswith("/releases?per_page=100"):
-            assert "--paginate" in args and "--slurp" in args
+            assert "--paginate" in args and "--slurp" not in args
             return [
                 [{"id": 1, "tag_name": "unrelated"}],
                 [{"id": 42, "tag_name": f"data-{DAY}", "draft": True}],
@@ -39,6 +56,20 @@ def test_gh_finds_draft_before_tag_exists_and_reads_all_assets(tmp_path, monkeyp
     assert release["id"] == 42 and release["draft"]
     assert [a["name"] for a in release["assets"]] == ["part1", "part2"]
     assert len(calls) == 3
+
+
+@pytest.mark.parametrize("payload", [b"[] trailing-invalid", b"{}"])
+def test_gh_paginate_rejects_partial_or_wrong_shape(tmp_path, monkeypatch, payload):
+    import subprocess
+
+    monkeypatch.setattr(
+        "grvt_data.publish.subprocess.run",
+        lambda command, **kwargs: subprocess.CompletedProcess(command, 0, payload, b""),
+    )
+    with pytest.raises((ValueError, TypeError)):
+        GitHub(Config(data_dir=tmp_path))._run(
+            ["api", "repos/example/releases", "--paginate"]
+        )
 
 
 class FakeGitHub:
@@ -531,7 +562,7 @@ def test_gh_release_reads_all_asset_pages(tmp_path, monkeypatch):
 
     def run(args, **kw):
         if "--paginate" in args:
-            assert "--slurp" in args
+            assert "--slurp" not in args
             return [[{"name": "first"}], [{"name": "last"}]]
         return {"id": 1}
 

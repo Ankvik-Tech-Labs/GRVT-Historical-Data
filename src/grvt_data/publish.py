@@ -69,9 +69,22 @@ class GitHub:
             raise RuntimeError(
                 f"GitHub command failed ({result.returncode}): {message[:500]}"
             )
-        return (
-            json.loads(result.stdout) if json_output and result.stdout.strip() else None
-        )
+        if not json_output or not result.stdout.strip():
+            return None
+        if "--paginate" in args:
+            # gh 2.46 has --paginate but no --slurp: stdout is consecutive
+            # complete JSON arrays, not one JSON document or JSON lines.
+            decoder = json.JSONDecoder()
+            remaining = result.stdout.decode().lstrip()
+            pages = []
+            while remaining:
+                page, end = decoder.raw_decode(remaining)
+                if not isinstance(page, list):
+                    raise TypeError("expected a JSON array from paginated REST list")
+                pages.append(page)
+                remaining = remaining[end:].lstrip()
+            return pages
+        return json.loads(result.stdout)
 
     def release(self, day):
         release = self._run(
@@ -81,7 +94,7 @@ class GitHub:
             # A draft does not create its Git tag until publication. GitHub's
             # by-tag endpoint can therefore return 404 for an existing draft.
             pages = self._run(
-                ["api", f"{self.base}/releases?per_page=100", "--paginate", "--slurp"]
+                ["api", f"{self.base}/releases?per_page=100", "--paginate"]
             )
             matches = [
                 row
@@ -98,7 +111,6 @@ class GitHub:
                     "api",
                     f"{self.base}/releases/{release['id']}/assets?per_page=100",
                     "--paginate",
-                    "--slurp",
                 ]
             )
             release["assets"] = [asset for page in pages for asset in page]
