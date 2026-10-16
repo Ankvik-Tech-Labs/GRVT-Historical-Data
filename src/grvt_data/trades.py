@@ -125,6 +125,33 @@ def _timed_pages(api, instrument, start, end, cursor):
         yield response, timing
 
 
+def _replay_pages(api, pages, initial_state):
+    """Only durable envelopes establish rows/cursor and canonical provenance."""
+    evidence = _empty_query_evidence()
+    rows_by_id = {}
+    state = initial_state
+    envelopes = sorted(pages.glob("*.json"))
+    # The envelope is the commit record. If a process died before progress.json
+    # was replaced, its last complete page still advances the recovered cursor.
+    for index, envelope_path in enumerate(envelopes):
+        _check(api)
+        if envelope_path.name != f"{index:010d}.json":
+            raise ValueError("durable page ledger has a missing segment")
+        envelope = json.loads(envelope_path.read_text())
+        state = envelope["state"]
+        if (state["instrument"], state["start_ns"], state["end_ns"]) != (
+            initial_state["instrument"],
+            initial_state["start_ns"],
+            initial_state["end_ns"],
+        ):
+            raise ValueError("durable page query identity mismatch")
+        if envelope.get("kind", "page") == "page":
+            evidence = _observe_query(evidence, envelope.get("query_provenance"))
+        for row in envelope["rows"]:
+            rows_by_id.setdefault(row["trade_id"], row)
+    return {**state, **evidence}, rows_by_id, len(envelopes), evidence
+
+
 def _instrument(api, root, instrument, start, end):
     directory = root / instrument / f"{start}-{end}"
     pages = directory / "pages"
@@ -146,29 +173,8 @@ def _instrument(api, root, instrument, start, end):
         "api_bound_semantics": "start inclusive; end inclusive; local [start,end)",
         "path": str(directory / "trades.parquet"),
     }
-    evidence = _empty_query_evidence()
-    rows_by_id = {}
-    envelopes = sorted(pages.glob("*.json"))
-    # The envelope is the commit record. If a process died before progress.json
-    # was replaced, its last complete page still advances the recovered cursor.
-    for index, envelope_path in enumerate(envelopes):
-        _check(api)
-        if envelope_path.name != f"{index:010d}.json":
-            raise ValueError("durable page ledger has a missing segment")
-        envelope = json.loads(envelope_path.read_text())
-        state = envelope["state"]
-        if (state["instrument"], state["start_ns"], state["end_ns"]) != (
-            instrument,
-            start,
-            end,
-        ):
-            raise ValueError("durable page query identity mismatch")
-        if envelope.get("kind", "page") == "page":
-            evidence = _observe_query(evidence, envelope.get("query_provenance"))
-        for row in envelope["rows"]:
-            rows_by_id.setdefault(row["trade_id"], row)
-    state = {**state, **evidence}
-    sequence = len(envelopes)
+    initial_state = state
+    state, rows_by_id, sequence, evidence = _replay_pages(api, pages, initial_state)
     if state["pagination_exhausted"] and progress_path.exists():
         final = json.loads(progress_path.read_text())
         if final.get("complete") and Path(state["path"]).is_file():
@@ -276,20 +282,11 @@ def _instrument(api, root, instrument, start, end):
         state = {**state, "complete": True, "error": None}
         write_json_atomic(progress_path, state)
     except Exception as exc:  # noqa: BLE001 — per-instrument failures must remain explicit
-        # Re-read the ledger on the next attempt, including a page whose progress
-        # replace failed. BaseException intentionally escapes simulated hard kills.
-        durable = (
-            json.loads(max(pages.glob("*.json")).read_text())["state"]
-            if sequence
-            else {
-                **state,
-                "pages": 0,
-                "rows": 0,
-                "cursor": "",
-                "seen_cursors": [],
-                "pagination_exhausted": False,
-            }
-        )
+        # A failed write may have committed its page before reporting an error,
+        # or may only have changed in-memory candidate state. Replay actual
+        # envelopes for both cases; embedded aggregate fields are never authority.
+        # BaseException intentionally escapes simulated hard kills.
+        durable, _, _, _ = _replay_pages(api, pages, initial_state)
         state = {**durable, "complete": False, "error": f"{type(exc).__name__}: {exc}"}
         write_json_atomic(progress_path, state)
     return state

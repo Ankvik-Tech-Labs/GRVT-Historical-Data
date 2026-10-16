@@ -592,3 +592,145 @@ def test_complete_cache_preserves_valid_provenance_and_makes_no_requests(
     assert not retry.calls
     assert result["query_started_at_ns"] == first["query_started_at_ns"]
     assert result["instruments"] == first["instruments"]
+
+
+def test_failed_legacy_resume_rebuilds_missing_provenance_before_sealing(
+    tmp_path, monkeypatch
+):
+    import grvt_data.trades as module
+    from grvt_data.archive import seal_revision
+    from grvt_data.config import Config
+
+    clock = [END + 31 * 10**9]
+    monkeypatch.setattr(module.time, "time_ns", lambda: clock[0])
+    run(
+        tmp_path,
+        API(
+            {"": [{"result": [trade("a")], "next": "c"}, RuntimeError("first failure")]}
+        ),
+    )
+    page = next(tmp_path.rglob("pages/0000000000.json"))
+    envelope = json.loads(page.read_text())
+    assert envelope["state"]["query_provenance_complete"]
+    del envelope["query_provenance"]
+    write_json_atomic(page, envelope)
+    clock[0] = END + 61 * 10**9
+    retry = API({"c": [RuntimeError("resume failed before new page")]})
+    result = run(tmp_path, retry)
+    assert retry.calls == ["c"] and not result["complete"]
+    state = result["instruments"]["BTC_USDT_Perp"]
+    assert state["pages"] == state["queried_pages"] == 1
+    assert state["query_started_at_ns"] is None
+    assert not state["query_provenance_complete"]
+    assert result["query_started_at_ns"] is None
+    assert not result["query_provenance_complete"]
+    progress = json.loads(next(tmp_path.rglob("progress.json")).read_text())
+    assert (
+        progress["query_started_at_ns"] is None
+        and not progress["query_provenance_complete"]
+    )
+    with pytest.raises(ValueError, match="query-start provenance"):
+        seal_revision(Config(data_dir=tmp_path), DAY, result)
+
+
+@pytest.mark.parametrize("durable_write", [False, True])
+def test_failed_page_write_recovers_only_actual_durable_page_evidence(
+    tmp_path, monkeypatch, durable_write
+):
+    import grvt_data.trades as module
+    from grvt_data.config import Config
+
+    clock = [END + 31 * 10**9]
+    monkeypatch.setattr(module.time, "time_ns", lambda: clock[0])
+    run(
+        tmp_path,
+        API({"": [{"result": [trade("a")], "next": "c"}, RuntimeError("interrupted")]}),
+    )
+    original = module.write_json_atomic
+
+    def fail(path, payload):
+        if path.parent.name == "pages" and path.name == "0000000001.json":
+            if durable_write:
+                original(path, payload)
+            raise OSError("page write reported failure")
+        original(path, payload)
+
+    monkeypatch.setattr(module, "write_json_atomic", fail)
+    clock[0] = END + 61 * 10**9
+    retry = API({"c": [{"result": [trade("b")], "next": ""}]})
+    retry.config = Config(data_dir=tmp_path, trade_indexing_lag_seconds=0)
+    result = run(tmp_path, retry)
+    assert not result["complete"]
+    state = result["instruments"]["BTC_USDT_Perp"]
+    assert state["pages"] == state["queried_pages"] == (2 if durable_write else 1)
+    assert state["rows"] == (2 if durable_write else 1)
+    assert state["cursor"] == ("" if durable_write else "c")
+    assert state["query_provenance_complete"]
+    assert state["query_started_at_ns"] == END + 31 * 10**9
+    assert state["indexing_grace_seconds"] == (0 if durable_write else 30)
+    assert result["indexing_grace_seconds"] == (0 if durable_write else 30)
+    monkeypatch.setattr(module, "write_json_atomic", original)
+    continuation = API({"c": [{"result": [trade("b")], "next": ""}]})
+    completed = run(tmp_path, continuation)
+    assert completed["complete"] and completed["rows"] == 2
+    assert continuation.calls == ([] if durable_write else ["c"])
+    assert completed["instruments"]["BTC_USDT_Perp"]["queried_pages"] == 2
+    assert completed["indexing_grace_seconds"] == (0 if durable_write else 30)
+
+
+@pytest.mark.parametrize("durable_write", [False, True])
+def test_first_page_write_failure_uses_durable_envelope_not_candidate(
+    tmp_path, monkeypatch, durable_write
+):
+    import grvt_data.trades as module
+
+    monkeypatch.setattr(module.time, "time_ns", lambda: END + 31 * 10**9)
+    original = module.write_json_atomic
+
+    def fail(path, payload):
+        if path.parent.name == "pages":
+            if durable_write:
+                original(path, payload)
+            raise OSError("first page write reported failure")
+        original(path, payload)
+
+    monkeypatch.setattr(module, "write_json_atomic", fail)
+    result = run(tmp_path, API({"": [{"result": [trade("a")], "next": "c"}]}))
+    state = result["instruments"]["BTC_USDT_Perp"]
+    assert not result["complete"]
+    assert state["pages"] == state["queried_pages"] == (1 if durable_write else 0)
+    assert state["rows"] == (1 if durable_write else 0)
+    assert state["query_started_at_ns"] == (END + 31 * 10**9 if durable_write else None)
+    assert state["indexing_grace_seconds"] == (30 if durable_write else None)
+    monkeypatch.setattr(module, "write_json_atomic", original)
+    cursor = "c" if durable_write else ""
+    continuation = API(
+        {cursor: [{"result": [] if durable_write else [trade("a")], "next": ""}]}
+    )
+    completed = run(tmp_path, continuation)
+    assert continuation.calls == [cursor]
+    assert completed["complete"] and completed["rows"] == 1
+    assert completed["query_provenance_complete"]
+
+
+def test_valid_failed_resume_can_seal_only_incomplete_coverage(tmp_path, monkeypatch):
+    import grvt_data.trades as module
+    from grvt_data.archive import retry_queue, seal_revision
+    from grvt_data.config import Config
+
+    monkeypatch.setattr(module.time, "time_ns", lambda: END + 31 * 10**9)
+    run(
+        tmp_path,
+        API(
+            {"": [{"result": [trade("a")], "next": "c"}, RuntimeError("first failure")]}
+        ),
+    )
+    result = run(tmp_path, API({"c": [RuntimeError("another failure")]}))
+    assert not result["complete"] and result["query_provenance_complete"]
+    config = Config(data_dir=tmp_path)
+    bundle = seal_revision(config, DAY, result)
+    manifest = json.loads((bundle / "manifest-rev01.json").read_text())
+    assert not manifest["trades"]["full_day_complete"]
+    assert manifest["trades"]["provisional"]
+    assert not manifest["trades"]["instruments"]["BTC_USDT_Perp"]["complete"]
+    assert str(DAY) in retry_queue(config)["dates"]

@@ -62,7 +62,12 @@ advancing the lazy API iterator (a conservative lower bound including rate limit
 and network retries). Instrument page/checkpoint state aggregates earliest start,
 minimum applied `indexing_grace_seconds`, `queried_pages`, and
 `query_provenance_complete`. Replay rebuilds these aggregates from page envelopes;
-a newer progress checkpoint cannot overwrite their provenance. Complete-cache
+a newer progress checkpoint cannot overwrite their provenance. The same canonical
+replay runs on the exception path: a page-write failure may have committed an
+envelope before reporting an error, or may only have created an in-memory
+candidate. Recovery scans actual durable envelopes in either case, preserving
+missing/legacy evidence and excluding uncommitted rows/timing. It never restores
+embedded state aggregates as authoritative after a failed resume. Complete-cache
 reuse and partial cursor resume preserve earlier page timing and grace.
 The report aggregates the earliest instrument start and minimum applied grace;
 `requested_indexing_grace_seconds` separately records this attempt's configuration.
