@@ -137,7 +137,13 @@ def test_recovery_itself_can_crash_without_losing_tail_evidence(tmp_path, monkey
     import pytest
 
     writer = SegmentWriter(tmp_path, "depth")
-    writer.append({"received_ns": 1})
+    writer.set_checkpoints(
+        {
+            "BTC": {"last_update_received_ns": 5, "last_update_receipt_index": 1},
+            "AAOI": {"last_update_received_ns": 10, "last_update_receipt_index": 2},
+        }
+    )
+    writer.append({"received_ns": 20, "type": "raw", "receipt_index": 3})
     writer.abort()
     path = next(tmp_path.rglob("*.open"))
     with path.open("ab") as stream:
@@ -156,6 +162,10 @@ def test_recovery_itself_can_crash_without_losing_tail_evidence(tmp_path, monkey
     outages = SegmentWriter(tmp_path, "depth").recover()
     assert outages[0]["discarded_bytes"] == 6
 
+    assert {
+        i: o["start_received_ns"] for i, o in outages[0]["instrument_outages"].items()
+    } == {"BTC": 5, "AAOI": 10}
+
 
 def test_corrupt_first_frame_is_not_a_publishable_empty_segment(tmp_path):
     writer = SegmentWriter(tmp_path, "depth")
@@ -166,3 +176,51 @@ def test_corrupt_first_frame_is_not_a_publishable_empty_segment(tmp_path):
     assert outages[0]["discarded_bytes"] == 6
     assert not list(tmp_path.rglob("*.frames"))
     assert not list(tmp_path.rglob("*.open"))
+
+
+def test_recovery_uses_per_instrument_normalized_bounds_not_peer_raw_or_control(
+    tmp_path,
+):
+    writer = SegmentWriter(tmp_path, "depth")
+    writer.set_checkpoints(
+        {
+            "BTC": {
+                "session_id": "s",
+                "ready": True,
+                "last_update_received_ns": 5,
+                "last_update_receipt_index": 1,
+                "bids": [],
+                "asks": [],
+            },
+            "AAOI": {
+                "session_id": "s",
+                "ready": True,
+                "last_update_received_ns": 6,
+                "last_update_receipt_index": 2,
+                "bids": [],
+                "asks": [],
+            },
+        }
+    )
+    writer.append(
+        {
+            "type": "delta",
+            "instrument": "AAOI",
+            "session_id": "s",
+            "received_ns": 10,
+            "receipt_index": 3,
+        }
+    )
+    writer.append(
+        {"type": "raw", "instrument": "BTC", "received_ns": 20, "receipt_index": 4}
+    )
+    writer.append({"type": "day_boundary", "received_ns": 30, "receipt_index": 5})
+    writer.abort()
+    with next(tmp_path.rglob("*.open")).open("ab") as stream:
+        stream.write(b"broken")
+    outage = SegmentWriter(tmp_path, "depth").recover()[0]
+    assert outage["instrument_outages"]["BTC"]["start_received_ns"] == 5
+    assert outage["instrument_outages"]["BTC"]["start_receipt_index"] == 1
+    assert outage["instrument_outages"]["AAOI"]["start_received_ns"] == 10
+    assert outage["instrument_outages"]["AAOI"]["start_receipt_index"] == 3
+    assert outage["discarded_bytes"] == 6

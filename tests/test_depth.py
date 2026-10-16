@@ -259,8 +259,12 @@ def test_raw_is_durable_before_invalid_normalization(tmp_path):
         capture.process(connection, "{bad json", 1)
     capture.writer.close()
     records = [r for p in tmp_path.rglob("*.frames") for r in read_segment(p)]
-    assert records[-1]["raw_text"] == "{bad json"
-    assert records[-1]["type"] == "raw"
+    bad_index = next(
+        i for i, r in enumerate(records) if r.get("raw_text") == "{bad json"
+    )
+    assert records[bad_index]["type"] == "raw"
+    assert all(r["type"] == "outage" for r in records[bad_index + 1 :])
+    assert all(not b.ready for b in connection.books.values())
 
 
 def test_bounded_apply_queue_overflow():
@@ -778,3 +782,284 @@ def test_outage_starts_at_each_instruments_last_valid_receipt():
     outages = {r["instrument"]: r for r in connection.outages("gap", 20)}
     assert outages["BTC"]["start_received_ns"] == 2
     assert outages["AAOI"]["start_received_ns"] == 10
+
+
+def test_disconnected_checkpoint_survives_rotation_and_midnight_without_prior_segment(
+    tmp_path, monkeypatch
+):
+    from grvt_data.config import Config
+    from grvt_data.depth import Capture
+    from grvt_data.storage import read_segment
+
+    current = [1792195198 * 10**9]  # 2026-10-16 23:59:58 UTC
+    monkeypatch.setattr("time.time_ns", lambda: current[0])
+    capture = Capture(Config(data_dir=tmp_path))
+    connection = Connection(["BTC@100", "AAOI@100"])
+    connection.open()
+    capture.connections.append(connection)
+    capture.process(connection, synthetic_ack(connection.selectors), current[0])
+    for selector in connection.selectors:
+        capture.process(connection, synthetic_feed(selector, 0), current[0])
+    capture.record_outages(connection, "socket lost")
+    assert all(not book.ready for book in connection.books.values())
+    with pytest.raises(ProtocolViolation):
+        capture.process(connection, synthetic_feed("BTC@100", 100), current[0])
+    receipt = capture.rotate_now()
+    for path in receipt.closed_segments:
+        (tmp_path / path).unlink()  # Already published/pruned previous revision.
+
+    current[0] += 3 * 10**9  # Still in backoff; no ACK/snapshot before midnight.
+    capture.writer.append(
+        {
+            "type": "day_boundary",
+            "received_ns": capture.now(),
+            "receipt_index": capture.receipt_index,
+        }
+    )
+    capture.writer.close()
+    path = next(tmp_path.rglob("*.frames"))
+    checkpoint = next(read_segment(path))
+    assert set(checkpoint["checkpoints"]) == {"BTC", "AAOI"}
+    for book in checkpoint["checkpoints"].values():
+        assert not book["ready"]
+        assert book["pending_outage"]["reason"] == "socket lost"
+        assert book["pending_outage"]["end_received_ns"] is None
+        assert book["pending_outage"]["start_received_ns"] == current[0] - 3 * 10**9
+    old_session = connection.session_id
+    connection.open()
+    assert connection.session_id != old_session
+    with pytest.raises(ProtocolViolation):
+        capture.process(connection, synthetic_feed("BTC@100", 100), current[0])
+    connection.open()
+    capture.process(connection, synthetic_ack(connection.selectors), current[0])
+    with pytest.raises(ProtocolViolation):
+        capture.process(connection, synthetic_feed("BTC@100", 100), current[0])
+    connection.open()
+    capture.process(connection, synthetic_ack(connection.selectors), current[0])
+    capture.process(connection, synthetic_feed("BTC@100", 0), current[0])
+    assert connection.books["BTC@100"].ready
+    assert "pending_outage" not in capture.checkpoints()["BTC"]
+    assert not capture.checkpoints()["AAOI"]["ready"]
+    assert capture.checkpoints()["AAOI"]["pending_outage"]["end_received_ns"] is None
+    capture.writer.close()
+
+
+@pytest.mark.parametrize("rollback", [False, True])
+def test_recovery_closes_distinct_pending_outages_on_fresh_snapshots(
+    tmp_path, monkeypatch, rollback
+):
+    from grvt_data.config import Config
+    from grvt_data.depth import Capture
+    from grvt_data.storage import SegmentWriter, read_segment, write_json_atomic
+
+    writer = SegmentWriter(tmp_path, "depth")
+    writer.set_checkpoints(
+        {
+            "BTC": {
+                "session_id": "old",
+                "ready": True,
+                "last_update_received_ns": 5,
+                "last_update_receipt_index": 1,
+                "bids": [],
+                "asks": [],
+            },
+            "AAOI": {
+                "session_id": "old",
+                "ready": True,
+                "last_update_received_ns": 6,
+                "last_update_receipt_index": 2,
+                "bids": [],
+                "asks": [],
+            },
+        }
+    )
+    writer.append(
+        {
+            "type": "delta",
+            "instrument": "AAOI",
+            "session_id": "old",
+            "received_ns": 10,
+            "receipt_index": 3,
+        }
+    )
+    # A valid BTC update after clock rollback must win by index, not max(time).
+    if rollback:
+        writer.append(
+            {
+                "type": "delta",
+                "instrument": "BTC",
+                "session_id": "old",
+                "received_ns": 4,
+                "receipt_index": 4,
+            }
+        )
+    writer.append(
+        {
+            "type": "raw",
+            "instrument": "BTC",
+            "received_ns": 3 if rollback else 20,
+            "receipt_index": 5,
+        }
+    )
+    writer.append(
+        {
+            "type": "day_boundary",
+            "received_ns": 2 if rollback else 30,
+            "receipt_index": 6,
+        }
+    )
+    writer.abort()
+    with next(tmp_path.rglob("*.open")).open("ab") as stream:
+        stream.write(b"broken")
+    write_json_atomic(
+        tmp_path / "state/depth-receipt-index.json", {"reserved_through": 100}
+    )
+    clock = [1 if rollback else 40]
+    monkeypatch.setattr("time.time_ns", lambda: clock[0])
+    capture = Capture(Config(data_dir=tmp_path))
+    starts = {"BTC": 4 if rollback else 5, "AAOI": 10}
+    indices = {"BTC": 4 if rollback else 1, "AAOI": 3}
+    for instrument, start in starts.items():
+        pending = capture.pending_outages[instrument]
+        assert pending["start_received_ns"] == start
+        assert pending["start_receipt_index"] == indices[instrument]
+        assert pending["clock_rollback"] is rollback
+        cp = capture.checkpoints()[instrument]
+        assert not cp["ready"]
+        assert cp["pending_outage"]["start_received_ns"] == start
+    # The new segment must carry unresolved provenance even before connections
+    # are re-created, and after prior revision inputs have been pruned.
+    receipt = capture.rotate_now()
+    for path in tmp_path.rglob("*.frames"):
+        path.unlink()
+    capture.writer.append(
+        {
+            "type": "day_boundary",
+            "received_ns": capture.now(),
+            "receipt_index": capture.receipt_index,
+        }
+    )
+    capture.writer.flush()
+    cp = next(read_segment(next(tmp_path.rglob("*.open"))))
+    assert {
+        i: b["pending_outage"]["start_received_ns"]
+        for i, b in cp["checkpoints"].items()
+    } == starts
+    connection = Connection(["BTC@100", "AAOI@100"])
+    connection.open()
+    capture.connections.append(connection)
+    capture.process(connection, synthetic_ack(connection.selectors), clock[0])
+    for selector in connection.selectors:
+        capture.process(connection, synthetic_feed(selector, 0), clock[0])
+    assert not capture.pending_outages
+    capture.writer.close()
+    closed = [
+        r
+        for p in tmp_path.rglob("*.frames")
+        for r in read_segment(p)
+        if r["type"] == "outage" and r.get("end_received_ns") is not None
+    ]
+    assert {r["instrument"]: r["start_received_ns"] for r in closed} == starts
+    assert all(r["end_receipt_index"] > r["start_receipt_index"] for r in closed)
+    if rollback:
+        assert all(r["clock_rollback"] for r in closed)
+        assert all(r["coverage_start_received_ns"] == 1 for r in closed)
+        assert all(r["start_received_ns"] > r["end_received_ns"] for r in closed)
+    assert receipt.cutoff_receipt_index >= 101
+
+
+def test_socket_failure_records_outage_before_slow_close(tmp_path, monkeypatch):
+    import asyncio
+    import contextlib
+
+    from grvt_data import depth
+    from grvt_data.config import Config
+
+    async def run():
+        closing = asyncio.Event()
+        release_close = asyncio.Event()
+
+        class Socket:
+            def __init__(self):
+                self.messages = [
+                    synthetic_ack(["BTC@100"]),
+                    synthetic_feed("BTC@100", 0),
+                ]
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                closing.set()
+                await release_close.wait()
+
+            async def send(self, raw):
+                pass
+
+            async def recv(self):
+                if self.messages:
+                    return json.dumps(self.messages.pop(0))
+                raise OSError("transport lost")
+
+        monkeypatch.setattr(depth, "connect", lambda *a, **k: Socket())
+        capture = depth.Capture(Config(data_dir=tmp_path))
+        connection = Connection(["BTC@100"])
+        capture.connections.append(connection)
+        queue = asyncio.Queue(maxsize=256)
+        runner = asyncio.create_task(
+            depth._connection_loop(connection, queue, capture.config)
+        )
+        try:
+            # Open, sent subscribe, ACK, snapshot, then failure notification.
+            for _ in range(5):
+                kind, args, future = await asyncio.wait_for(queue.get(), 1)
+                if kind == "open":
+                    result = connection.open()
+                elif kind == "message":
+                    result = capture.process(*args)
+                else:
+                    assert kind == "outage"
+                    result = capture.record_outages(*args)
+                future.set_result(result)
+            await asyncio.wait_for(closing.wait(), 1)
+            assert not connection.books["BTC@100"].ready
+            receipt = capture.rotate_now()
+            assert not receipt.checkpoints["BTC"]["ready"]
+            assert (
+                "transport lost"
+                in receipt.checkpoints["BTC"]["pending_outage"]["reason"]
+            )
+        finally:
+            runner.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await runner
+            capture.writer.close()
+
+    asyncio.run(run())
+
+
+def test_repeated_backoff_failure_keeps_original_pending_bound_on_recovery(
+    tmp_path, monkeypatch
+):
+    from grvt_data.config import Config
+    from grvt_data.depth import Capture
+    from grvt_data.storage import SegmentWriter
+
+    current = [5]
+    monkeypatch.setattr("time.time_ns", lambda: current[0])
+    capture = Capture(Config(data_dir=tmp_path))
+    connection = Connection(["BTC@100"])
+    capture.connections.append(connection)
+    connection.open()
+    capture.process(connection, synthetic_ack(connection.selectors), 5)
+    capture.process(connection, synthetic_feed("BTC@100", 0), 5)
+    capture.record_outages(connection, "first socket lost")
+    capture.rotate_now()
+    current[0] = 10
+    connection.open()  # A fresh attempt fails before receiving any snapshot.
+    capture.process(connection, synthetic_ack(connection.selectors), 10)
+    capture.record_outages(connection, "second socket lost")
+    capture.writer.abort()
+    outage = SegmentWriter(tmp_path, "depth").recover()[0]
+    assert outage["instrument_outages"]["BTC"]["start_received_ns"] == 5
+    assert outage["instrument_outages"]["BTC"]["start_receipt_index"] == 2

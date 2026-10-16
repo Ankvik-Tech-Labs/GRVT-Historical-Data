@@ -134,6 +134,119 @@ class RotateReceipt:
         return asdict(self)
 
 
+class _RecoveryBounds:
+    """Last durable applied state per instrument, ordered by operation index.
+
+    Raw/control/peer frames cannot advance an instrument's outage start. True
+    wall-clock samples may regress; coverage bounds widen conservatively while
+    the original last-update samples and indices remain intact.
+    """
+
+    def __init__(self):
+        self.instruments = {}
+        self.last_ns = None
+        self.last_index = None
+        self.clock_rollback = False
+        self.receipt_order_uncertain = False
+
+    def observe(self, row):
+        now, index = row.get("received_ns"), row.get("receipt_index")
+        if now is not None:
+            if self.last_ns is not None and now < self.last_ns:
+                self.clock_rollback = True
+            self.last_ns = now
+        if index is not None:
+            if self.last_index is not None and index < self.last_index:
+                self.receipt_order_uncertain = True
+            self.last_index = index
+        if row.get("type") == "checkpoint":
+            for instrument, book in row.get("checkpoints", {}).items():
+                pending = book.get("pending_outage")
+                state = (
+                    dict(pending)
+                    if pending
+                    else {
+                        "session_id": book.get("session_id"),
+                        "start_received_ns": book.get("last_update_received_ns"),
+                        "start_receipt_index": book.get("last_update_receipt_index"),
+                    }
+                )
+                state["_coverage_min"] = state.get(
+                    "coverage_start_received_ns", state["start_received_ns"]
+                )
+                self.instruments[instrument] = state
+                self.receipt_order_uncertain |= state.get(
+                    "receipt_order_uncertain", False
+                )
+                if state.get("clock_rollback") or (
+                    now is not None
+                    and state["start_received_ns"] is not None
+                    and now < state["start_received_ns"]
+                ):
+                    self.clock_rollback = True
+        instrument = row.get("instrument")
+        if instrument is not None:
+            state = self.instruments.setdefault(
+                instrument,
+                {
+                    "session_id": None,
+                    "start_received_ns": None,
+                    "start_receipt_index": None,
+                    "_coverage_min": None,
+                },
+            )
+            if row.get("type") in ("snapshot", "delta"):
+                prior_index = state.get("start_receipt_index")
+                if index is None or prior_index is None or index > prior_index:
+                    self.instruments[instrument] = {
+                        "session_id": row.get("session_id"),
+                        "start_received_ns": now,
+                        "start_receipt_index": index,
+                        "_coverage_min": now,
+                    }
+                else:
+                    self.receipt_order_uncertain = True
+            elif row.get("type") == "outage" and row.get("end_received_ns") is None:
+                state.update(row)
+                self.clock_rollback |= row.get("clock_rollback", False)
+                self.receipt_order_uncertain |= row.get(
+                    "receipt_order_uncertain", False
+                )
+                state["_coverage_min"] = row.get(
+                    "coverage_start_received_ns", row.get("start_received_ns")
+                )
+        # Later samples may widen coverage under rollback, but never replace a
+        # last-valid-update timestamp or its operation index.
+        if now is not None:
+            for state in self.instruments.values():
+                if state["_coverage_min"] is not None:
+                    state["_coverage_min"] = min(state["_coverage_min"], now)
+
+    def outages(self, received_ns, segment, discarded_bytes):
+        self.observe({"received_ns": received_ns})
+        result = {}
+        for instrument, state in self.instruments.items():
+            result[instrument] = {
+                "type": "outage",
+                "reason": "crash_recovery",
+                "instrument": instrument,
+                "session_id": state.get("session_id"),
+                "received_ns": received_ns,
+                "start_received_ns": state["start_received_ns"],
+                "start_receipt_index": state.get("start_receipt_index"),
+                "end_received_ns": None,
+                "end_receipt_index": None,
+                "clock_rollback": self.clock_rollback,
+                "receipt_order_uncertain": self.receipt_order_uncertain,
+                "coverage_start_received_ns": state["_coverage_min"],
+                "segment": segment,
+                "discarded_bytes": discarded_bytes,
+            }
+            if state.get("reason"):
+                result[instrument]["preceding_reason"] = state["reason"]
+        return result
+
+
 class SegmentWriter:
     """Single-owner writer. Call only in the collector's serialized apply loop.
 
@@ -240,30 +353,37 @@ class SegmentWriter:
         outages = []
         for path in sorted(self.root.rglob("*.open")):
             good = 0
-            last_ns = None
-            instruments = set()
+            bounds = _RecoveryBounds()
             with path.open("r+b") as stream:
                 while True:
                     try:
                         row = _read_frame(stream)
                         if row is None:
                             break
-                        last_ns = row.get("received_ns", last_ns)
-                        instruments.update(row.get("checkpoints", {}))
-                        if row.get("instrument"):
-                            instruments.add(row["instrument"])
+                        bounds.observe(row)
                         good = stream.tell()
                     except (ValueError, zlib.error, UnicodeError):
                         break
                 discarded = path.stat().st_size - good
+                now = time.time_ns()
+                segment = str(path.relative_to(self.data_dir))
+                instrument_outages = bounds.outages(now, segment, discarded)
+                starts = [o["start_received_ns"] for o in instrument_outages.values()]
                 outage = {
                     "type": "outage",
                     "reason": "crash_recovery",
-                    "received_ns": time.time_ns(),
-                    "start_received_ns": last_ns,
+                    "received_ns": now,
+                    # Aggregate bound is only a conservative summary. Consumers
+                    # must use instrument_outages for each instrument's coverage.
+                    "start_received_ns": min(starts)
+                    if starts and None not in starts
+                    else None,
                     "end_received_ns": None,
-                    "instruments": sorted(instruments),
-                    "segment": str(path.relative_to(self.data_dir)),
+                    "instruments": sorted(instrument_outages),
+                    "instrument_outages": instrument_outages,
+                    "clock_rollback": bounds.clock_rollback,
+                    "receipt_order_uncertain": bounds.receipt_order_uncertain,
+                    "segment": segment,
                     "discarded_bytes": discarded,
                 }
                 # Journal BEFORE truncation/rename. If recovery itself crashed,
@@ -272,7 +392,15 @@ class SegmentWriter:
                 if journal.exists():
                     prior = json.loads(journal.read_text())
                     if prior["discarded_bytes"] >= discarded:
-                        outage = prior
+                        if "instrument_outages" in prior:
+                            outage = prior
+                        else:
+                            # Upgrade legacy journals without losing the original
+                            # discarded-tail evidence or recovery clock sample.
+                            outage["discarded_bytes"] = prior["discarded_bytes"]
+                            outage["received_ns"] = prior["received_ns"]
+                            for pending in instrument_outages.values():
+                                pending["discarded_bytes"] = prior["discarded_bytes"]
                 write_json_atomic(journal, outage)
                 stream.truncate(good)
                 stream.flush()

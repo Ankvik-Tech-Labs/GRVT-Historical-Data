@@ -63,6 +63,7 @@ class DepthBook:
         self.asks = {}
         self.receipt_index = 0
         self.last_received_ns = None
+        self.last_update_receipt_index = None
 
     def acknowledge(self, session_id: str, first_sequence: int):
         self.session_id = session_id
@@ -124,6 +125,7 @@ class DepthBook:
             self.last_sequence = sequence
         self.receipt_index += 1
         self.last_received_ns = received_ns
+        self.last_update_receipt_index = self.receipt_index
         return [
             {
                 "type": "snapshot" if snapshot else "delta",
@@ -149,6 +151,7 @@ class DepthBook:
             "last_sequence": self.last_sequence,
             "ready": self.ready,
             "last_update_received_ns": self.last_received_ns,
+            "last_update_receipt_index": self.last_update_receipt_index,
             "receipt_index": self.receipt_index,
             "bids": [dict(self.bids[p]) for p in sorted(self.bids, reverse=True)],
             "asks": [dict(self.asks[p]) for p in sorted(self.asks)],
@@ -167,9 +170,11 @@ class Connection:
         self.request_id = 1
         self.acked = False
         self.last_received_ns = None
+        self.disconnected = True
 
     def open(self, request_id: int = 1) -> dict:
         self.session_id = uuid.uuid4().hex
+        self.disconnected = False
         self.request_id = request_id
         self.acked = False
         self.last_received_ns = None
@@ -181,7 +186,17 @@ class Connection:
             "params": {"stream": "v1.book.d", "selectors": self.selectors},
         }
 
+    def invalidate(self):
+        self.disconnected = True
+        self.acked = False
+        for book in self.books.values():
+            book.ready = False
+
     def apply(self, message: dict, received_ns: int) -> list[DepthEvent]:
+        if self.disconnected:
+            raise ProtocolViolation(
+                "feed on disconnected session; fresh connection required"
+            )
         if "result" in message or "error" in message:
             try:
                 result = message["result"]
@@ -229,6 +244,9 @@ class Connection:
                     if s in self.books
                     else self.last_received_ns
                 ),
+                "start_receipt_index": (
+                    self.books[s].last_update_receipt_index if s in self.books else None
+                ),
                 "end_received_ns": None,
             }
             for s in self.selectors
@@ -257,22 +275,40 @@ class Capture:
         self.recovered = self.writer.recover()
         self.day = None
         for outage in self.recovered:
-            for instrument in outage["instruments"]:
-                self.pending_outages[instrument] = dict(outage, instrument=instrument)
+            for instrument, pending in outage["instrument_outages"].items():
+                self.pending_outages[instrument] = dict(pending)
             now = self.now()
             self.writer.append(
                 dict(outage, received_ns=now, receipt_index=self.receipt_index)
             )
 
     def checkpoints(self):
-        return {
+        checkpoints = {
             book.instrument: book.checkpoint(self.last_received_ns)
             for connection in self.connections
             for book in connection.books.values()
         }
+        for instrument, pending in self.pending_outages.items():
+            checkpoint = checkpoints.setdefault(
+                instrument, DepthBook(instrument).checkpoint(self.last_received_ns)
+            )
+            checkpoint["ready"] = False
+            checkpoint["pending_outage"] = dict(pending)
+        return checkpoints
 
     def now(self):
+        previous_ns = self.last_received_ns
         self.last_received_ns = time.time_ns()
+        for pending in self.pending_outages.values():
+            if self.last_received_ns < previous_ns:
+                pending["clock_rollback"] = True
+            start = pending.get(
+                "coverage_start_received_ns", pending["start_received_ns"]
+            )
+            if start is not None:
+                pending["coverage_start_received_ns"] = min(
+                    start, self.last_received_ns
+                )
         self.receipt_index += 1
         if self.receipt_index > self.index_limit:
             self.index_limit += 1_000_000
@@ -282,10 +318,30 @@ class Capture:
 
     def record_outages(self, connection, reason):
         now = self.now()
-        for outage in connection.outages(reason, now):
+        outages = connection.outages(reason, now)
+        connection.invalidate()
+        # Set every peer's state before opening any segment/checkpoint.
+        for outage in outages:
             outage["receipt_index"] = self.receipt_index
+            start = outage["start_received_ns"]
+            outage["clock_rollback"] = start is not None and now < start
+            outage["coverage_start_received_ns"] = (
+                min(start, now) if start is not None else None
+            )
             self.pending_outages.setdefault(outage["instrument"], outage)
-            self.writer.append(outage)
+        for outage in outages:
+            pending = self.pending_outages[outage["instrument"]]
+            self.writer.append(
+                dict(
+                    outage,
+                    start_received_ns=pending["start_received_ns"],
+                    start_receipt_index=pending.get("start_receipt_index"),
+                    coverage_start_received_ns=pending.get(
+                        "coverage_start_received_ns", pending["start_received_ns"]
+                    ),
+                    clock_rollback=pending.get("clock_rollback", False),
+                )
+            )
 
     def process(self, connection, message, wire_received_ns, direction="recv"):
         now = self.now()
@@ -314,12 +370,20 @@ class Capture:
                 if not isinstance(message, dict):
                     raise TypeError("non-object wire message")
             except (ValueError, TypeError) as exc:
+                self.record_outages(connection, f"invalid wire JSON: {exc}")
                 raise ProtocolViolation(f"invalid wire JSON: {exc}") from exc
         if direction == "send":
             return []
-        events = connection.apply(message, now)
+        try:
+            events = connection.apply(message, now)
+        except SequenceGap as exc:
+            self.record_outages(connection, f"{type(exc).__name__}: {exc}")
+            raise
         for event in events:
             event["receipt_index"] = self.receipt_index
+            connection.books[
+                message["selector"]
+            ].last_update_receipt_index = self.receipt_index
             if event["type"] == "snapshot":
                 instrument = event["instrument"]
                 pending = self.pending_outages.pop(instrument, None)
@@ -338,6 +402,9 @@ class Capture:
                         "start_received_ns": start,
                         "reason": "no_midnight_checkpoint",
                     }
+                coverage_start = pending.get(
+                    "coverage_start_received_ns", pending["start_received_ns"]
+                )
                 self.writer.append(
                     dict(
                         pending,
@@ -345,6 +412,15 @@ class Capture:
                         end_received_ns=now,
                         session_id=connection.session_id,
                         receipt_index=self.receipt_index,
+                        end_receipt_index=self.receipt_index,
+                        coverage_start_received_ns=min(coverage_start, now)
+                        if coverage_start is not None
+                        else None,
+                        clock_rollback=pending.get("clock_rollback", False)
+                        or (
+                            pending.get("start_received_ns") is not None
+                            and now < pending["start_received_ns"]
+                        ),
                     )
                 )
             self.writer.append(event)
@@ -401,6 +477,7 @@ async def _connection_loop(connection, queue, config):
     attempt = 0
     while True:
         started = time.monotonic()
+        outage_recorded = False
         try:
             async with connect(
                 config.ws_url,
@@ -411,25 +488,45 @@ async def _connection_loop(connection, queue, config):
                 open_timeout=30,
                 close_timeout=5,
             ) as socket:
-                request = await _submit(queue, "open", connection)
-                await socket.send(json.dumps(request))
-                await _submit(
-                    queue, "message", connection, request, time.time_ns(), "send"
-                )
-                # Only initial ACK + snapshots have a timeout. There is no
-                # message-silence timeout once all books are ready: ping/pong
-                # judges socket liveness even for quiet equities.
-                handshake_deadline = time.monotonic() + 30
-                while True:
-                    if all(b.ready for b in connection.books.values()):
-                        raw = await socket.recv()
-                    else:
-                        remaining = handshake_deadline - time.monotonic()
-                        if remaining <= 0:
-                            raise ProtocolViolation("ACK/snapshot handshake timeout")
-                        raw = await asyncio.wait_for(socket.recv(), remaining)
-                    wire_ns = time.time_ns()
-                    await _submit(queue, "message", connection, raw, wire_ns, "recv")
+                try:
+                    request = await _submit(queue, "open", connection)
+                    await socket.send(json.dumps(request))
+                    await _submit(
+                        queue, "message", connection, request, time.time_ns(), "send"
+                    )
+                    # Only initial ACK + snapshots have a timeout. There is no
+                    # message-silence timeout once all books are ready: ping/pong
+                    # judges socket liveness even for quiet equities.
+                    handshake_deadline = time.monotonic() + 30
+                    while True:
+                        if all(b.ready for b in connection.books.values()):
+                            raw = await socket.recv()
+                        else:
+                            remaining = handshake_deadline - time.monotonic()
+                            if remaining <= 0:
+                                raise ProtocolViolation(
+                                    "ACK/snapshot handshake timeout"
+                                )
+                            raw = await asyncio.wait_for(socket.recv(), remaining)
+                        wire_ns = time.time_ns()
+                        await _submit(
+                            queue, "message", connection, raw, wire_ns, "recv"
+                        )
+                except (
+                    OSError,
+                    TimeoutError,
+                    WebSocketException,
+                    SequenceGap,
+                    ValueError,
+                    TypeError,
+                ) as exc:
+                    # Persist unavailable state before a close handshake can
+                    # block while another control/day-boundary operation runs.
+                    await _submit(
+                        queue, "outage", connection, f"{type(exc).__name__}: {exc}"
+                    )
+                    outage_recorded = True
+                    raise
         except asyncio.CancelledError:
             raise
         except (
@@ -440,7 +537,10 @@ async def _connection_loop(connection, queue, config):
             ValueError,
             TypeError,
         ) as exc:
-            await _submit(queue, "outage", connection, f"{type(exc).__name__}: {exc}")
+            if not outage_recorded:
+                await _submit(
+                    queue, "outage", connection, f"{type(exc).__name__}: {exc}"
+                )
             # Reset only after a sustained healthy run, never per successful ACK.
             if time.monotonic() - started >= 60:
                 attempt = 0

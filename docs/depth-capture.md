@@ -44,7 +44,10 @@ remove prices. Numeric strings retain their original representations.
 
 Any gap, failed/partial ACK, pre-snapshot delta, handshake failure, queue overflow
 or socket failure reconnects the entire connection and records an outage for all
-its instruments. The reconnect has a new session and discards old counters.
+its instruments. All affected books become `ready: false` immediately when the
+apply owner detects failure, before a slow socket close or reconnect backoff.
+That invalid session rejects further feed/ACK messages until a new connection
+opens. The reconnect has a new session and discards old counters.
 Repeated failures wait 1, 2, 4, ... seconds, capped at 300 seconds; only a run lasting
 at least 60 seconds resets this schedule. ACK plus snapshots have a 30-second
 handshake deadline. WebSocket ping/pong (20-second interval and timeout) judges
@@ -65,8 +68,15 @@ are each 64 MiB. `storage.read_segment(path)` is a strict streaming reader.
 Every segment's first frame has `type: "checkpoint"`, its receipt index and
 partition clock, and `checkpoints`, keyed by instrument. Each book checkpoint
 contains `session_id`, `first_sequence`, `last_sequence` (null until first delta),
-`ready`, `last_update_received_ns`, local book `receipt_index`, bids and asks. `ready: false` explicitly
-requires a subsequent ACK/snapshot anchor. A new day's checkpoint represents
+`ready`, `last_update_received_ns`, `last_update_receipt_index`, local book
+`receipt_index`, bids and asks. `last_update_receipt_index` is the global operation
+index of the latest applied update, distinct from the local book update count.
+`ready: false` explicitly requires a subsequent ACK/snapshot anchor. Each
+unavailable instrument also embeds its complete `pending_outage` inside its book
+checkpoint. This includes instruments recovered before any connection is opened.
+A segment opened during backoff or after midnight therefore carries unresolved
+coverage and cannot claim a valid book even if the previous segment was pruned.
+Only that instrument's fresh snapshot clears its pending outage. A new day's checkpoint represents
 state **before** its first raw envelope is applied. A mid-day checkpoint belongs
 to the newly opened segment after the cutoff. An external state file is never
 required to replay a self-contained segment.
@@ -87,12 +97,34 @@ journals an explicit `crash_recovery` outage **before** truncation, and seals th
 valid prefix. An empty/corrupt first frame yields no empty publishable segment.
 Even an intact `.open` prefix records interrupted coverage. Recovery journals
 live at `state/outages/<segment-stem>.json`, recording discarded bytes, affected
-instruments, segment identity and the last known receipt; retrying recovery
-preserves existing discarded-tail evidence. Sealing must include these durable
+instruments, segment identity and an `instrument_outages` map keyed by full
+instrument name. Each entry contains its own `start_received_ns` and
+`start_receipt_index`: recovery seeds these from the embedded pending outage or
+checkpoint's last valid update, then advances them only for durable normalized
+`snapshot`/`delta` frames for that instrument. Raw, control and peer frames never
+advance another instrument's start. The journal's top-level `start_received_ns`
+is only a conservative aggregate summary; consumers use `instrument_outages`
+for per-instrument coverage. Retrying recovery preserves existing discarded-tail
+evidence and per-instrument bounds, including a crash after truncation but before
+rename. Older journals without the map are upgraded from the valid prefix while
+retaining the original discarded-byte evidence. Sealing must include these durable
 journals, even if a crash prevented copying the outage into a subsequent segment.
 On a fresh session, its first snapshot anchors replay. Missing coverage from UTC
 midnight (or from the last valid state on reconnect/recovery) is explicitly an
 outage, never assumed backfilled.
+
+Outage closure on a fresh snapshot preserves each instrument's true last-valid
+`start_received_ns`/`start_receipt_index` and adds `end_received_ns` and
+`end_receipt_index`. Repeated reconnect failures retain the original pending
+start even when the new connection has not received a snapshot. Wall-clock
+rollback can make an actual start timestamp greater than the end timestamp;
+operation indices still determine chronology. Recovery and pending outages
+carry `clock_rollback` and `coverage_start_received_ns`, a conservative minimum
+of observed clock samples since the last valid update, without replacing the
+true start sample. `receipt_order_uncertain` flags malformed/regressed index
+order. Consumers must retain these uncertainty flags and treat affected coverage
+as unavailable/uncertain, never infer completeness from an empty/reversed wall-
+clock interval or substitute the aggregate journal start for instrument bounds.
 
 ## Rotate-now and downstream ownership
 
