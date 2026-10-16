@@ -77,12 +77,15 @@ class GrvtAPI:
                         try:
                             retry_after = max(0, float(header))
                         except ValueError:
-                            retry_after = max(
-                                0,
-                                (
-                                    parsedate_to_datetime(header) - datetime.now(UTC)
-                                ).total_seconds(),
-                            )
+                            try:
+                                parsed = parsedate_to_datetime(header)
+                                if parsed.tzinfo is None:
+                                    parsed = parsed.replace(tzinfo=UTC)
+                                retry_after = max(
+                                    0, (parsed - datetime.now(UTC)).total_seconds()
+                                )
+                            except (ValueError, TypeError, OverflowError):
+                                retry_after = 0.0
                         raise httpx.HTTPStatusError(
                             "retryable response",
                             request=response.request,

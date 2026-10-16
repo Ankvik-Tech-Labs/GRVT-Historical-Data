@@ -734,3 +734,30 @@ def test_valid_failed_resume_can_seal_only_incomplete_coverage(tmp_path, monkeyp
     assert manifest["trades"]["provisional"]
     assert not manifest["trades"]["instruments"]["BTC_USDT_Perp"]["complete"]
     assert str(DAY) in retry_queue(config)["dates"]
+
+
+def test_malformed_retry_after_http_date_falls_back_to_backoff(tmp_path, monkeypatch):
+    import httpx
+
+    from grvt_data.api import GrvtAPI
+    from grvt_data.config import Config
+
+    count = 0
+    sleeps = []
+
+    def handler(request):
+        nonlocal count
+        count += 1
+        if count == 1:
+            return httpx.Response(503, headers={"Retry-After": "not a date"})
+        return httpx.Response(200, json={"result": []})
+
+    api = GrvtAPI(
+        Config(data_dir=tmp_path),
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+    monkeypatch.setattr(api, "_sleep", lambda seconds: sleeps.append(seconds))
+    assert api.instruments(active=True) == []
+    assert count == 2
+    assert 1 in sleeps
+    api.close()

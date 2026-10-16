@@ -1,0 +1,10 @@
+/home/avik/.local/share/grvt-historical-data/logs/daily.log /home/avik/.local/share/grvt-historical-data/logs/status.log {
+    weekly
+    rotate 8
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+    su avik avik
+}

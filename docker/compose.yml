@@ -1,0 +1,22 @@
+services:
+  depth:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    user: "${GRVT_UID:-1000}:${GRVT_GID:-1000}"
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 60s
+    volumes:
+      - ${GRVT_DATA_DIR:-/home/avik/.local/share/grvt-historical-data}:/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import json,time; p=json.load(open('/data/state/depth-status.json')); assert 0 <= time.time_ns()-p['received_ns'] < 60000000000"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '8'

@@ -440,6 +440,7 @@ class Capture:
                     "session_id": v["session_id"],
                     "last_sequence": v["last_sequence"],
                     "ready": v["ready"],
+                    "last_update_received_ns": v["last_update_received_ns"],
                 }
                 for k, v in self.checkpoints().items()
             },
