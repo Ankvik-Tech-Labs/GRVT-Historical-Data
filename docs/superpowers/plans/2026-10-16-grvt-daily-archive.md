@@ -1,4 +1,42 @@
-# GRVT Daily Tick and Depth Archive Implementation Plan
+# GRVT Daily Tick Archive Implementation Plan
+
+
+## Current execution direction — ticks only
+
+The user's explicit 2026-10-16 revision supersedes the mixed-depth tasks below:
+daily historical ticks for every active/retained perpetual, canonical retained
+Parquet under `/srv/grvt`, and verified releases from those same ticks. Keep the
+legacy collector stopped and prior release assets/state intact. No new depth
+assets or depth subscription work is in scope.
+
+1. **Done:** preserve and verify the mixed-depth activation evidence and retained
+   post-cutoff segment; both historical revisions are committed and restored.
+2. **Done:** assign `/srv/grvt` to `avik:data` (2770), lock both publication roots,
+   copy and verify 2,566 files / 3,326,768,995 bytes, preserve the original, and
+   materialize yesterday's 184 canonical Parquet files from its verified release.
+3. **Done, reviewed `ae8d843`, 193 tests:** tick-only CLI/config, frozen dataset scope, retained
+   canonical Parquet with data-group readability, no new depth tar, no depth
+   receipt requirement, disabled-depth status, and `/srv/grvt` operational scripts.
+   The coordinator owns implementation delegation and review; this agent owns
+   deployment and these existing documents only.
+4. **Done:** deploy the reviewed revision, publish today's tick-only
+   correction without altering historical refs, verify canonical/archive hashes,
+   transient cleanup, actual tick runtime/storage margin, and status.
+5. **Done at 20:33 UTC:** install only the GRVT named UTC cron block, preserving unrelated
+   entries; verify backup, CLI lock contention, wrapper, local status, and actual
+   user-owned logrotate permissions. No collector restart is required.
+6. **Future observation:** the next completed-day run re-downloads full ticks and
+   supersedes provisional tick coverage; do not claim that run before it occurs.
+
+The additional GRVT/Apex historical and incremental OHLCV request is owned by a
+separate implementation wave; this tick-only base is complete, not that expansion.
+Audit findings are retained in `docs/research/2026-10-16-market-data-gap-audit.md`.
+
+See the current binding scope in the [design](../specs/2026-10-16-grvt-daily-archive-design.md).
+The remainder is retained as historical implementation/audit context and does not
+authorize restarting depth or deleting canonical ticks.
+
+## Historical mixed tick/depth plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking. Await user plan review and execution-method selection before implementation.
 
@@ -138,6 +176,17 @@ previously closed unreserved files remain separately discoverable.
 - [ ] **Step 5: Commit as `feat: add GRVT collector deployment and daily scheduling`.**
 
 ### Task 5: Deploy and prove end-to-end operation on vitalik8
+
+**Deployment result, 2026-10-16:** implementation and bounded release operation
+are verified, but unattended rollout is blocked by the measured storage gate.
+All 184 instruments remained ready across 62 samples over 61 minutes. The actual
+sealed staging/raw ratio is 2.23085 including copied raw chunks; projected peak
+co-resident use is 122.582 GB, exceeding the 60.801 GB allowance. The collector is
+stopped and no GRVT cron entry was installed. Storage migration, restart,
+scheduling, and retention/scope decisions are on user hold. README and the Traycer
+`grvt-deployment` artifact contain the release evidence and proposed storage
+remedy. Task 5 is not complete: a fresh gate and subsequent revision-2 observation
+remain prerequisites for unattended operation.
 
 **Files:** Update `README.md` with verified operational commands; append deployment evidence to the Traycer design artifact. Runtime files stay outside Git.
 

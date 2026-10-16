@@ -1,10 +1,81 @@
-# GRVT daily tick and depth archive design
+# GRVT daily tick archive design
+
+
+## Current binding scope — user revision, 2026-10-16 UTC
+
+The user explicitly chose **ticks only, like Apex for now**, and directed use of
+**`/srv/grvt`** for both consumer data and release publication. This section
+supersedes the historical mixed tick/depth design below where they conflict.
+
+| Decision | Binding behavior |
+|---|---|
+| Universe | Daily REST historical executions for all active GRVT perpetuals, unioned with retained daily instrument metadata; equities included |
+| Depth | Disabled in this deployment; collector remains stopped; no new depth assets, segment reservations, or depth recovery work in tick-only revisions |
+| Canonical consumer files | Retain `/srv/grvt/trades/YYYY-MM-DD/INSTRUMENT/START_NS-END_NS/trades.parquet`, group-readable by `data`; full UTC day and provisional windows remain distinct |
+| Same data in releases | Seal and SHA-verify archives from these canonical tick bytes, with existing immutable assets and cumulative revision semantics |
+| Local cleanup | Verified commit may prune transient page envelopes and staging; canonical Parquet, operational state, and preserved historical depth are retained, including canonical paths associated with old mixed revisions |
+| Historical releases | Preserve existing mixed revision assets and cumulative references exactly; a tick-only correction explicitly records its dataset scope and emits no new depth tar asset |
+| Revision recovery | Dataset scope is frozen per revision; resume previously sealed bytes in their original mode |
+| Current-day proof | Tick-only explicit UTC exchange-time bound, 30-second query-start grace, no depth receipt/rotation; provisional coverage queues a later full-day download |
+| Scheduling | Host cron at 00:30 UTC; local status every five minutes; user-owned logrotate at 00:45 UTC with weekly/eight/compressed policy |
+| Publication access | Private repository, published/non-draft releases accessible to authorized readers; no visibility change |
+| Credentials | Existing host `gh` authentication only; none copied into `/srv/grvt`, Git, evidence, or a container |
+
+The public CLI uses `--datasets trades` by default and `/srv/grvt` as its data
+root. The reusable library retains a legacy explicit mixed-data mode. Tick-only
+status marks depth disabled instead of reporting a stale collector as failure.
+The CLI owns the publication lock, deadline supervision, resumable checkpoints,
+and verified cleanup; cron adds no duplicate lock. Critical verified cleanup runs
+before new daily work and preserves canonical files.
+
+### Migration and operational state
+
+The dedicated `/srv/grvt` directory was assigned to `avik:data`, mode `2770`,
+using a scoped Docker helper with only that destination mounted, followed by
+host-owned setgid permissions. No unrelated service directory was modified.
+With the old collector stopped and both publication roots locked, 2,566 files /
+3,326,768,995 bytes were copied and independently SHA-256 verified at both roots;
+SQLite quick-check passed. The original root remains intact. Yesterday's verified
+release restored 184 canonical Parquet files / 4,253,137 bytes with a source/hash
+index. Reviewed runtime `ae8d843` passed 193 tests in the stable environment and
+published the verified tick-only revision 2. The tick storage gate passed and the
+named UTC schedule was installed at 20:33. All 368 canonical Parquet files were
+retained after cleanup; unrelated cron entries were unchanged. The existing
+depth-based storage gate is historical evidence, not a requirement to collect
+depth again. The next completed-day run remains unobserved.
+
+The user's additional historical/incremental OHLCV request for both GRVT and Apex
+is separate implementation work, not completed by this tick deployment. The
+primary-source audit is in `docs/research/2026-10-16-market-data-gap-audit.md`.
+In particular, current instrument creation metadata must not truncate candle
+backfill: BTC's live 2025 candle predates its current 2026 creation metadata.
+
+Storage checks for ticks must account for retained canonical history plus peak
+transient REST pages, sealed Parquet copies/tar assets, the next daily attempt,
+and publication-delay headroom. Measure the real tick cycle and keep the same
+50%-of-free safety criterion for its transient peak; monitor canonical growth
+without silently imposing a new retention policy. The old continuous-depth rate
+and raw-accrual formula are not applied to the disabled dataset.
+
+### Relationship to Apex
+
+Live vitalik8 cron runs Apex's `refresh_apex_srv_data.sh` at 02:45 and 10:45 UTC;
+it delegates to `scripts.apex_release_sync`, which consumes upstream releases into
+retained `/srv/apex/futures` and mirrors for a local consumer. Apex's producer
+publishes its live trade dataset separately. GRVT uses daily REST history directly
+into retained `/srv/grvt` canonical ticks and publishes those same files. It keeps
+the dual local-consumer/release behavior while preserving GRVT's immutable revision
+contract rather than adopting Apex's mutable asset replacement.
+
+## Historical mixed tick/depth design — superseded where stated above
 
 ## Intent and current state
 
 Requested: inspect the Apex historical-data setup, collect GRVT trades/ticks and order-book depth on **vitalik8**, and store the data as GitHub Release assets.
 
-**Design status: approved by the user on 2026-10-16.** No collector, schedule, release, or production configuration has been installed or changed.
+**Design status: approved by the user on 2026-10-16; implementation and bounded production proof performed.** Deployment on vitalik8 measured 61 minutes of all 184 perpetuals and failed the storage gate: the required three raw days alone exceed half the data root's available space. Cron remains uninstalled and continuous collection is paused after the bounded proof. Additional assigned storage and a fresh gate are required before unattended activation. The inspection table below records the earlier planning snapshot; verified operation is documented in README and the Traycer `grvt-deployment` artifact.
+
+“Public” in the publication state machine means **published/non-draft (`draft=false`)**. The repository stays private and releases require authorized access. Publication, body-pointer, hash-verification and cleanup predicates are unchanged.
 
 ## Inspection evidence — 2026-10-16 UTC
 
@@ -169,4 +240,4 @@ The process exits non-zero if any date failed or exceeded its deadline, but only
 
 ## Approved scope
 
-The user approved: **all active perpetuals; daily historical ticks; continuous full L2 depth at 100 ms; previous-day releases at 00:30 UTC; indefinite remote retention.** Local retention is superseded from "seven days of verified data" to **immediate deletion of sealed, hash-verified, committed local data only**, preserving open segments, unpublished/unverified staging, and small operational state (see "Retention and disk budget" above). Implementation has not started; this document and the implementation plan went through three rounds of review before Task 1 begins: an independent plan review (`artifacts/grvt-plan-review`, blockers B1–B5 and recommendations R1–R10/N1–N4), a scoped re-review (`artifacts/grvt-plan-rereview`, blockers K1–K7) that found the first repair's revision/publication and disk-gate mechanisms still underspecified, and a second scoped re-review (`artifacts/grvt-plan-rereview-round3`, blockers B1–B9 in this round's numbering, plus non-blocking N1–N7) that found the K1/K3 fix had left revision semantics undefined and the K6 fix's cron supervision still unwired — both now resolved above, together with routing publish-crash recovery by observed remote state, excluding the current UTC day from automatic processing, and per-date failure isolation. A final scoped fix gate (`artifacts/grvt-plan-fix-gate`) then found three residual defects, resolved above as U1 (yesterday-first ordering, a configurable 60-minute worker-process deadline, atomic resumable checkpoints, measured rollout timing, and durable per-date attempts with stale-running recovery), U2 (work-based pending dates, terminal-date no-ops, and `--allow-today --end-time-ns <int64>` targeting exactly today once backlog is drained), and U3 (one state-based definition of "committed": the remote release is public and its body points to the verified cumulative manifest).
+The user approved: **all active perpetuals; daily historical ticks; continuous full L2 depth at 100 ms; previous-day releases at 00:30 UTC; indefinite remote retention.** Local retention is superseded from "seven days of verified data" to **immediate deletion of sealed, hash-verified, committed local data only**, preserving open segments, unpublished/unverified staging, and small operational state (see "Retention and disk budget" above). The pre-implementation review history is retained here: this document and the implementation plan went through three rounds of review before Task 1 began: an independent plan review (`artifacts/grvt-plan-review`, blockers B1–B5 and recommendations R1–R10/N1–N4), a scoped re-review (`artifacts/grvt-plan-rereview`, blockers K1–K7) that found the first repair's revision/publication and disk-gate mechanisms still underspecified, and a second scoped re-review (`artifacts/grvt-plan-rereview-round3`, blockers B1–B9 in this round's numbering, plus non-blocking N1–N7) that found the K1/K3 fix had left revision semantics undefined and the K6 fix's cron supervision still unwired — both now resolved above, together with routing publish-crash recovery by observed remote state, excluding the current UTC day from automatic processing, and per-date failure isolation. A final scoped fix gate (`artifacts/grvt-plan-fix-gate`) then found three residual defects, resolved above as U1 (yesterday-first ordering, a configurable 60-minute worker-process deadline, atomic resumable checkpoints, measured rollout timing, and durable per-date attempts with stale-running recovery), U2 (work-based pending dates, terminal-date no-ops, and `--allow-today --end-time-ns <int64>` targeting exactly today once backlog is drained), and U3 (one state-based definition of "committed": the remote release is public and its body points to the verified cumulative manifest).
