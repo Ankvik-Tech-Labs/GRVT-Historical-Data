@@ -157,3 +157,23 @@ class GrvtAPI:
                 return
             seen.add(following)
             cursor = following
+
+    def candle_page(self, instrument, interval, start_ns, end_ns, cursor=""):
+        response = self._post(
+            "kline",
+            {
+                "instrument": instrument,
+                "interval": interval,
+                "type": "TRADE",
+                "start_time": str(start_ns),
+                "end_time": str(end_ns),
+                "limit": 1000,
+                "cursor": cursor,
+            },
+        )
+        if not isinstance(response["result"], list):
+            raise APIError("candle response missing result list")
+        response.setdefault("next", "")
+        if not isinstance(response["next"], str):
+            raise APIError("invalid candle cursor")
+        return response

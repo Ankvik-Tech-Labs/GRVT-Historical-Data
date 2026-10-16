@@ -277,7 +277,7 @@ def test_tick_status_ignores_stale_or_corrupt_depth_health(tmp_path, monkeypatch
 def test_cli_defaults_and_worker_payload_preserve_tick_scope(tmp_path, monkeypatch):
     seen = []
     monkeypatch.setattr(cli, "daily", lambda config, **kw: seen.append(config) or 0)
-    assert cli.main(["daily"]) == 0
+    assert cli.main(["daily", "--datasets", "trades"]) == 0
     assert seen[0].data_dir == Path("/srv/grvt")
     assert seen[0].datasets == ("trades",)
     output = tmp_path / "payload.json"

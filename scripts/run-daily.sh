@@ -8,4 +8,4 @@ DATA=${GRVT_DATA_DIR:-/srv/grvt}
 # runtime registers/reaps independent worker groups before timeout's final KILL.
 exec timeout --kill-after="${GRVT_KILL_AFTER:-30s}" "${GRVT_RUN_TIMEOUT:-6h}" \
     "$ROOT/.venv/bin/python" -m grvt_data.runtime \
-    "$ROOT/.venv/bin/grvt-data" daily --data-dir "$DATA" --datasets trades "$@"
+    "$ROOT/.venv/bin/grvt-data" daily --data-dir "$DATA" --datasets trades,ohlcv "$@"

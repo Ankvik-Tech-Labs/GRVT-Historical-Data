@@ -136,6 +136,15 @@ def pending_dates(config: Config, today: date) -> set[date]:
     yesterday = today - timedelta(days=1)
     if yesterday not in known | attempted:
         pending.add(yesterday)
+    if config.ohlcv_enabled:
+        row = latest.get(yesterday)
+        snapshot = (
+            json.loads(row["manifest_json"]).get("ohlcv", {})
+            if row and row["manifest_json"]
+            else {}
+        )
+        if snapshot.get("status") != "api-exhausted":
+            pending.add(yesterday)
     return {d for d in pending if d < today}
 
 
@@ -238,6 +247,7 @@ def seal_revision(
     end_ns=None,
     allow_today=False,
     deadline=None,
+    ohlcv_report=None,
 ) -> Path:
     receipt = _validate_request(config, day, trade_report, end_ns, allow_today)
     if not 1024 <= config.archive_part_bytes < 1024**3:
@@ -264,6 +274,29 @@ def seal_revision(
                 "part_bytes": config.archive_part_bytes,
                 **_metadata(config, day, deadline),
             }
+            if ohlcv_report is not None:
+                bundle = bundle_path(config, day, revision)
+                frozen = []
+                for entry in ohlcv_report["files"]:
+                    remaining_seconds(deadline)
+                    source = config.data_dir / entry["path"]
+                    source.resolve().relative_to(config.data_dir.resolve())
+                    if not entry["path"].startswith(("ohlcv/", "state/ohlcv/")):
+                        raise ValueError("invalid OHLCV snapshot path")
+                    target = bundle / "entries" / "ohlcv" / entry["path"]
+                    _atomic(
+                        target,
+                        lambda temp, source=source: shutil.copyfile(source, temp),
+                    )
+                    record = _record(target, bundle, deadline)
+                    if (record["sha256"], record["size"]) != (
+                        entry["sha256"],
+                        entry["size"],
+                    ):
+                        raise ValueError("OHLCV snapshot changed before freeze")
+                    frozen.append(record)
+                request["ohlcv_report"] = ohlcv_report
+                request["ohlcv_entries"] = frozen
             db.execute(
                 "INSERT INTO revisions(day,revision,status,request_json) VALUES (?,?,?,?)",
                 (str(day), revision, "sealing", json.dumps(request, sort_keys=True)),
@@ -675,6 +708,17 @@ def resume_revision(config: Config, day: date, revision: int, *, deadline=None) 
         trade_assets = _parts(
             config, db, day, revision, "trades", trade_entries, bundle, cap, deadline
         )
+        ohlcv_entries = copy.deepcopy(request.get("ohlcv_entries", []))
+        ohlcv_assets = []
+        if "ohlcv_report" in request:
+            if not all(_valid(entry, bundle, deadline) for entry in ohlcv_entries):
+                raise ValueError("frozen OHLCV snapshot mismatch")
+            evidence = bundle / "entries/ohlcv/coverage.json"
+            write_json_atomic(evidence, request["ohlcv_report"])
+            ohlcv_entries.append(_record(evidence, bundle, deadline))
+            ohlcv_assets = _parts(
+                config, db, day, revision, "ohlcv", ohlcv_entries, bundle, cap, deadline
+            )
         prior = db.execute(
             "SELECT manifest_json FROM revisions WHERE day=? AND revision<? ORDER BY revision DESC LIMIT 1",
             (str(day), revision),
@@ -689,6 +733,18 @@ def resume_revision(config: Config, day: date, revision: int, *, deadline=None) 
                 "trades": {"assets": [], "instruments": {}},
             }
         )
+        if "ohlcv_report" in request:
+            section = manifest.setdefault("ohlcv", {"assets": [], "files": []})
+            section["assets"].extend(ohlcv_assets)
+            section["files"].append({"revision": revision, "entries": ohlcv_entries})
+            section["latest_snapshot"] = request["ohlcv_report"]
+            section["snapshot_revision"] = revision
+            section["status"] = (
+                "api-exhausted" if request["ohlcv_report"]["complete"] else "partial"
+            )
+            section["coverage_clock"] = (
+                "snapshot_at_ns across historical opens; independent of tick day"
+            )
         manifest["revision"] = revision
         manifest["requested_interval_ns"] = list(window_bounds(day))
         manifest["partition_clocks"] = {
@@ -814,7 +870,7 @@ def resume_revision(config: Config, day: date, revision: int, *, deadline=None) 
         journal = {
             "day": str(day),
             "revision": revision,
-            "assets": depth_assets + trade_assets + [manifest_asset],
+            "assets": depth_assets + trade_assets + ohlcv_assets + [manifest_asset],
         }
         write_json_atomic(journal_path, journal)
         _finish_seal(db, day, revision, manifest, journal)

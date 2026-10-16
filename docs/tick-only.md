@@ -1,8 +1,10 @@
 # Tick-only collection
 
-The deployed daily, publication and status commands default to `--datasets trades`
-and `--data-dir /srv/grvt`. The daily wrapper and generated cron entries select
-trades explicitly. The library retains its historical combined default:
+For explicit tick-only operation, select `--datasets trades` and
+`--data-dir /srv/grvt`. The daily/publication/status CLI, wrapper and newly generated
+cron entries now select `trades,ohlcv`; see [OHLCV collection](grvt-ohlcv.md).
+An already installed cron stays unchanged until the deployment owner reruns the
+installer. The library retains its historical combined default:
 `Config(datasets=("trades",))` selects tick-only collection;
 `Config(datasets=("trades", "depth"))` selects legacy combined archives.
 

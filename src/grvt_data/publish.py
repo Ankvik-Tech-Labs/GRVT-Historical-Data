@@ -220,6 +220,7 @@ def _expected(manifest, manifest_asset):
     assets = [
         *manifest["depth"]["assets"],
         *manifest["trades"]["assets"],
+        *manifest.get("ohlcv", {}).get("assets", []),
         manifest_asset,
     ]
     result = {}
@@ -388,6 +389,8 @@ def publish_revision(
                 f"Ticks: {'full day' if manifest['trades']['full_day_complete'] else 'incomplete/provisional'}; "
                 f"depth: {manifest['depth']['status']} (received_ns; trades use exchange time)."
             )
+            if "ohlcv" in manifest:
+                body += f"\nOHLCV: {manifest['ohlcv']['status']}; historical snapshot at {manifest['ohlcv']['latest_snapshot']['snapshot_at_ns']} ns; see interval coverage."
             current_release = github.release(day)
             if current_release is None or (
                 not current_release["draft"] and _pointer(current_release) != pointer

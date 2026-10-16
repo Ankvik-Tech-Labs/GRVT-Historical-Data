@@ -30,13 +30,27 @@ class Config:
     archive_part_bytes: int = 1024**3 - 1
     release_asset_cap: int = 1000
     trade_indexing_lag_seconds: float = 30.0
+    ohlcv_recent_pages: int = 4096
+    ohlcv_backfill_pages: int = 128
+    ohlcv_budget_seconds: float = 1800.0
     datasets: tuple[str, ...] = ("trades", "depth")
 
     def __post_init__(self):
         # JSON worker payloads contain lists; normalize them at the boundary.
         object.__setattr__(self, "datasets", tuple(self.datasets))
-        if self.datasets not in (("trades",), ("trades", "depth")):
-            raise ValueError("datasets must be trades or trades,depth")
+        if self.datasets not in (("trades",), ("trades", "depth"), ("trades", "ohlcv")):
+            raise ValueError("datasets must be trades, trades,depth or trades,ohlcv")
+
+        if (
+            self.ohlcv_recent_pages < 1
+            or self.ohlcv_backfill_pages < 1
+            or self.ohlcv_budget_seconds <= 0
+        ):
+            raise ValueError("OHLCV budgets must be positive")
+
+    @property
+    def ohlcv_enabled(self):
+        return "ohlcv" in self.datasets
 
     @property
     def depth_enabled(self):

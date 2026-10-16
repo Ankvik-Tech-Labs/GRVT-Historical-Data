@@ -140,8 +140,8 @@ def test_installer_preserves_unrelated_cron_backs_up_and_replaces_idempotently(
     assert "stale" not in installed
     assert installed.count("# BEGIN grvt-data-daily") == 1
     assert "30 0 * * * " in installed and "*/5 * * * * " in installed
-    assert "run-daily.sh --datasets trades >>" in installed
-    assert "status --check --datasets trades >>" in installed
+    assert "run-daily.sh --datasets trades,ohlcv >>" in installed
+    assert "status --check --datasets trades,ohlcv >>" in installed
     assert "CRON_TZ" not in installed and "TZ=" not in installed
     assert "flock" not in installed
     assert next((data / "state").glob("crontab-*.backup")).read_text() == old
@@ -234,7 +234,7 @@ def test_compose_only_mounts_data_and_no_github_credentials():
     assert config["stop_grace_period"] == "1m0s"
     script = (ROOT / "scripts/run-daily.sh").read_text()
     assert " publish " not in script and "flock" not in script
-    assert '--data-dir "$DATA" --datasets trades' in script
+    assert '--data-dir "$DATA" --datasets trades,ohlcv' in script
     default = subprocess.run(
         [
             "docker",
