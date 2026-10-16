@@ -425,3 +425,40 @@ def test_live_fixture_preserves_time_bound_and_visibility_evidence():
     assert int(newest["event_time"]) > first_ts
     assert newest["trade_id"] == "207195872-1"
     assert last["received_ns"] - int(newest["event_time"]) == 7826196144
+
+
+def test_too_early_query_waits_indexing_grace_and_records_actual_start(
+    tmp_path, monkeypatch
+):
+    import grvt_data.trades as module
+
+    clock = [END + 5 * 10**9]
+    slept = []
+    monkeypatch.setattr(module.time, "time_ns", lambda: clock[0])
+
+    def sleep(seconds):
+        slept.append(seconds)
+        clock[0] += int(seconds * 10**9)
+
+    monkeypatch.setattr(module.time, "sleep", sleep)
+    api = API({"": [{"result": [], "next": ""}]})
+    result = run(tmp_path, api)
+    assert sum(slept) == 25
+    assert result["query_started_at_ns"] == END + 30 * 10**9
+    assert result["indexing_grace_seconds"] == 30
+    assert result["complete"]
+
+
+def test_expired_deadline_during_indexing_wait_never_completes(tmp_path, monkeypatch):
+    import time
+
+    import grvt_data.trades as module
+    from grvt_data.config import DeadlineExceeded
+
+    monkeypatch.setattr(module.time, "time_ns", lambda: END + 5 * 10**9)
+    api = API({"": [{"result": [], "next": ""}]})
+    api.deadline = time.monotonic() - 1
+    with pytest.raises(DeadlineExceeded):
+        run(tmp_path, api)
+    assert not api.calls
+    assert not list(tmp_path.rglob("*.parquet"))

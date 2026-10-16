@@ -8,7 +8,7 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 
 from .api import CursorRejected, GrvtAPI
-from .config import Instrument
+from .config import Config, Instrument, remaining_seconds
 from .storage import TRADE_SCHEMA, write_json_atomic, write_parquet_atomic
 
 NS = 10**9
@@ -246,7 +246,19 @@ def download_trades(
         raise ValueError("window outside int64")
     if any(not re.fullmatch(r"[A-Za-z0-9_]+", name) for name in instruments):
         raise ValueError("invalid instrument name")
+    # An operational buffer above the one observed 7.826s sample, not a
+    # guarantee of venue indexing completeness. Activation stays provisional.
+    grace = getattr(api, "config", Config()).trade_indexing_lag_seconds
+    if grace < 0:
+        raise ValueError("negative indexing grace")
+    while (wait := (end + int(grace * NS) - time.time_ns()) / NS) > 0:
+        _check(api)
+        time.sleep(min(wait, 1.0, remaining_seconds(getattr(api, "deadline", None))))
+    _check(api)
+    query_started_at_ns = time.time_ns()
     result = {
+        "query_started_at_ns": query_started_at_ns,
+        "indexing_grace_seconds": grace,
         "day": day.isoformat(),
         "start_ns": start,
         "end_ns": end,

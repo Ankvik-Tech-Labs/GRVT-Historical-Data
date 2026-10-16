@@ -70,7 +70,15 @@ def write_parquet_atomic(path: Path, rows: list[dict], schema: pa.Schema) -> Non
     _atomic(
         path,
         lambda temp: pq.write_table(
-            pa.Table.from_pylist(rows, schema=schema), temp, compression="zstd"
+            pa.Table.from_pylist(rows, schema=schema),
+            temp,
+            compression="zstd",
+            compression_level=3,
+            version="2.6",
+            data_page_version="1.0",
+            use_dictionary=True,
+            write_statistics=True,
+            row_group_size=65536,
         ),
     )
 
@@ -452,3 +460,121 @@ def write_pause(data_dir: Path, reason: str) -> dict:
     }
     write_json_atomic(path, marker)
     return marker
+
+
+# Publication helpers deliberately take no global lock. The CLI owns exclusion
+# across its parent and inherited worker descriptors.
+def publication_db(config_or_data_dir):
+    """Open the single WAL/FULL publication ledger (caller closes connection)."""
+    import sqlite3
+
+    root = Path(getattr(config_or_data_dir, "data_dir", config_or_data_dir))
+    path = root / "state" / "publication.sqlite"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    db = sqlite3.connect(path, timeout=30)
+    db.row_factory = sqlite3.Row
+    db.execute("PRAGMA journal_mode=WAL")
+    db.execute("PRAGMA synchronous=FULL")
+    db.execute("PRAGMA foreign_keys=ON")
+    db.executescript("""
+        CREATE TABLE IF NOT EXISTS revisions (
+            day TEXT NOT NULL, revision INTEGER NOT NULL,
+            status TEXT NOT NULL CHECK(status IN ('sealing','sealed','committed')),
+            request_json TEXT NOT NULL, manifest_json TEXT, journal_json TEXT,
+            remote_verified INTEGER NOT NULL DEFAULT 0,
+            commit_attempted INTEGER NOT NULL DEFAULT 0,
+            pruned INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY(day, revision)
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS one_unfinished_revision
+            ON revisions(day) WHERE status != 'committed';
+        CREATE TABLE IF NOT EXISTS segments (
+            identity TEXT PRIMARY KEY, day TEXT NOT NULL, revision INTEGER NOT NULL,
+            normalized_json TEXT,
+            FOREIGN KEY(day,revision) REFERENCES revisions(day,revision)
+        );
+        CREATE TABLE IF NOT EXISTS parts (
+            day TEXT NOT NULL, revision INTEGER NOT NULL, name TEXT NOT NULL,
+            record_json TEXT NOT NULL, remote_id INTEGER, verified INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY(day,revision,name),
+            FOREIGN KEY(day,revision) REFERENCES revisions(day,revision)
+        );
+        CREATE TABLE IF NOT EXISTS per_date_runs (
+            day TEXT NOT NULL, attempt_id INTEGER NOT NULL,
+            status TEXT NOT NULL CHECK(status IN
+                ('running','completed','failed','deadline_exceeded','interrupted')),
+            started_at_ns INTEGER NOT NULL, ended_at_ns INTEGER, error TEXT,
+            PRIMARY KEY(day,attempt_id)
+        );
+    """)
+    if "commit_attempted" not in {
+        row[1] for row in db.execute("PRAGMA table_info(revisions)")
+    }:
+        with db:
+            db.execute(
+                "ALTER TABLE revisions ADD COLUMN commit_attempted INTEGER NOT NULL DEFAULT 0"
+            )
+    return db
+
+
+def start_date_run(config_or_data_dir, day: date) -> int:
+    db = publication_db(config_or_data_dir)
+    try:
+        with db:
+            db.execute("BEGIN IMMEDIATE")
+            attempt = db.execute(
+                "SELECT coalesce(max(attempt_id),0)+1 FROM per_date_runs WHERE day=?",
+                (day.isoformat(),),
+            ).fetchone()[0]
+            db.execute(
+                "INSERT INTO per_date_runs VALUES (?,?, 'running',?,NULL,NULL)",
+                (day.isoformat(), attempt, time.time_ns()),
+            )
+        return attempt
+    finally:
+        db.close()
+
+
+def finish_date_run(
+    config_or_data_dir,
+    day: date,
+    attempt_id: int,
+    status: str,
+    error: str | None = None,
+) -> None:
+    if status not in {"completed", "failed", "deadline_exceeded", "interrupted"}:
+        raise ValueError("invalid terminal attempt status")
+    db = publication_db(config_or_data_dir)
+    try:
+        with db:
+            changed = db.execute(
+                "UPDATE per_date_runs SET status=?,ended_at_ns=?,error=? "
+                "WHERE day=? AND attempt_id=? AND status='running'",
+                (status, time.time_ns(), error, day.isoformat(), attempt_id),
+            ).rowcount
+            if changed != 1:
+                raise ValueError("no running attempt")
+    finally:
+        db.close()
+
+
+def recover_date_runs(config_or_data_dir) -> set[date]:
+    """Call only AFTER acquiring global lock; all previous writers are gone."""
+    db = publication_db(config_or_data_dir)
+    try:
+        with db:
+            days = {
+                date.fromisoformat(row[0])
+                for row in db.execute(
+                    "SELECT DISTINCT day FROM per_date_runs WHERE status='running'"
+                )
+            }
+            db.execute(
+                "UPDATE per_date_runs SET status='interrupted',ended_at_ns=?,"
+                "error='recovered after exclusive publication lock acquisition' "
+                "WHERE status='running'",
+                (time.time_ns(),),
+            )
+        return days
+    finally:
+        db.close()

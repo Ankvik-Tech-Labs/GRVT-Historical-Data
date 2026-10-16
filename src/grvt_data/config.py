@@ -27,6 +27,9 @@ class Config:
     hard_stop_free_bytes: int = 2 * 1024**3
     publish_delay_reserve_days: int = 1
     per_date_deadline_seconds: int = 3600
+    archive_part_bytes: int = 1024**3 - 1
+    release_asset_cap: int = 1000
+    trade_indexing_lag_seconds: float = 30.0
 
 
 class DeadlineExceeded(TimeoutError):

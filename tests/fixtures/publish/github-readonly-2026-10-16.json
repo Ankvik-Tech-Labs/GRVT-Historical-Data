@@ -1,0 +1,22 @@
+{
+  "observed_at_ns": 1792175548787179912,
+  "operation": "read-only; no releases or assets mutated",
+  "target_repo": "Ankvik-Tech-Labs/GRVT-Historical-Data",
+  "target_data_2026_10_15": "absent",
+  "reference_repo": "cli/cli",
+  "reference_tag": "v2.102.0",
+  "asset": {
+    "name": "gh_2.102.0_checksums.txt",
+    "id": 599854636,
+    "size": 1971,
+    "digest": "sha256:afe49e9affa232faa8212aed035417166f6ade9b9470acb53d4dbd28c0504e8d",
+    "browser_download_url": "https://github.com/cli/cli/releases/download/v2.102.0/gh_2.102.0_checksums.txt"
+  },
+  "api_digest_sha256": "afe49e9affa232faa8212aed035417166f6ade9b9470acb53d4dbd28c0504e8d",
+  "streamed_sha256_without_digest": "afe49e9affa232faa8212aed035417166f6ade9b9470acb53d4dbd28c0504e8d",
+  "documented_asset_cap": 1000,
+  "documentation": [
+    "https://docs.github.com/en/repositories/releasing-projects-on-github/about-releases",
+    "https://docs.github.com/en/rest/releases/assets"
+  ]
+}

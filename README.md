@@ -1,8 +1,8 @@
 # GRVT Historical Data
 
 Recoverable daily public trade downloads for GRVT perpetual instruments, including
-equities, and continuous replayable full L2 depth at 100 ms. Release publication
-is a subsequent task.
+equities, continuous replayable full L2 depth at 100 ms, and verified cumulative
+daily GitHub Release archives.
 
 Use Python 3.11 or later with an isolated environment:
 
@@ -62,7 +62,8 @@ finalization; empty days produce typed zero-row Parquet. Observed request bounds
 page/row counts and exhaustion are recorded per instrument. A current-day activation
 query requires explicit `end_ns` and produces a separate provisional window;
 a later full-day call starts from midnight in a distinct checkpoint directory.
-Same-day publication must wait beyond the observed indexing lag before sealing.
+The downloader waits until the query bound plus a configurable 30-second indexing
+buffer before querying; activation coverage remains provisional.
 
 Discovery records written by the depth collector use
 `data/state/discovery/YYYY-MM-DD.json` with shape
@@ -82,3 +83,6 @@ Continuous capture and its Unix rotate-now control client are documented in
 `asyncio.run(collect_depth(config))`; it discovers all active perpetuals, including
 equities, without streaming credentials. Closed CRC-framed compressed segments,
 self-contained checkpoints and explicit outages support independent replay.
+
+Sealing, publication recovery, cumulative manifests and verified-only cleanup are
+documented in [the archive publication contract](docs/archive-publication.md).
