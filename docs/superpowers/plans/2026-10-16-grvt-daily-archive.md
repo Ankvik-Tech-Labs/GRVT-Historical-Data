@@ -1,5 +1,23 @@
 # GRVT Daily Tick Archive Implementation Plan
 
+## Latest additive scope — deployed ticks plus historical OHLCV
+
+User subsequently added retained historical/incremental TRADE candles alongside
+ticks. Reviewed `0d8c1cf` is deployed under `/srv/grvt`, with eleven native Apex-compatible
+intervals plus true UTC calendar months derived only from complete closed daily
+coverage. Depth stays disabled. Canonical ticks/candles and candle query evidence
+are retained; immutable release snapshots reuse verified publication machinery.
+00:30 daily plus six bounded history runs, five-minute status and logrotate are
+installed with all unrelated cron preserved. First actual combined publication
+verified all2024native series recent-complete and368tickhashes unchanged. Full
+historical pagination remains partial; calendar184coverage records currently
+unavailable. See [live evidence](../../deployment-vitalik8.md) and
+[OHLCV contract](../../grvt-ohlcv.md). Earlier tick-only and mixed sections below
+record prior decisions; this additive section supersedes their active dataset
+selection and scheduling claims. Operational setup is verified; future scheduled
+firings and eventual historical exhaustion are separate pending observations.
+
+
 
 ## Current execution direction — ticks only
 

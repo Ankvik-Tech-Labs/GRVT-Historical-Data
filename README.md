@@ -1,8 +1,8 @@
 # GRVT Historical Data
 
-Daily historical **trade ticks only** for all active GRVT perpetual instruments,
-including equities, with retained canonical Parquet under `/srv/grvt` and verified
-GitHub Release archives built from the same ticks. Order-book depth is disabled
+Daily historical **trade ticks and incremental TRADE OHLCV** for all active GRVT
+perpetual instruments, including equities, with retained canonical Parquet under
+`/srv/grvt` and verified GitHub Release archives built from the same data. Order-book depth is disabled
 for this setup. Earlier depth captures, state, and published assets are preserved
 as historical evidence; new tick-only revisions emit no new depth assets.
 
@@ -18,17 +18,17 @@ isolated `.venv`. The canonical data and runtime root is **`/srv/grvt`**, owned 
 checksum-verified copy. No GitHub credentials are stored in the data root or a
 collector container; host-side `gh` owns publication authentication.
 
-The user changed scope to ticks only on 2026-10-16 after measuring the depth
-storage requirement. Reviewed revision `ae8d843` passed 193 tests in the stable
-environment. Its live tick-only revision-2 proof retained all 184 canonical files,
-verified their archive hashes, and passed the storage gate. The UTC schedule was
-installed at 20:33 UTC. The depth container remains stopped. Do not start the
-legacy depth profile for this deployment.
+Reviewed product `0d8c1cf` is deployed. The first combined cycle completed on
+2026-10-16 in 1,411.89 seconds, published October 15 revision 2, and verified all
+2,024 canonical candle files against authenticated release downloads. All 184
+instruments × 11 native intervals completed recent pagination; historical backfill
+is **partial**. The derived calendar-month interval remains unavailable until a
+closed month has all daily bars. All 368 existing canonical tick hashes were
+preserved. Depth remains stopped.
 
-The later requested historical/incremental OHLCV expansion for GRVT and Apex is
-separate work and is **not yet deployed** in this snapshot. The current schedule
-explicitly selects ticks. The [coverage audit](docs/research/2026-10-16-market-data-gap-audit.md)
-records actual Apex gaps and GRVT historical-candle API evidence.
+See [live deployment evidence](docs/deployment-vitalik8.md),
+[OHLCV contracts](docs/grvt-ohlcv.md), and the
+[coverage audit](docs/research/2026-10-16-market-data-gap-audit.md).
 
 ## Canonical ticks and retention
 
@@ -38,6 +38,8 @@ records actual Apex gaps and GRVT historical-candle API evidence.
     trades.parquet       # retained canonical ticks
     progress.json        # durable window/coverage metadata
     pages/               # transient resumable REST envelopes
+  ohlcv/INTERVAL/INSTRUMENT/YYYY-MM.parquet  # retained canonical candles
+  state/ohlcv/             # retained query envelopes, cursors and coverage
   staging/YYYY-MM-DD/revNN/  # transient immutable build bytes
   state/publication.sqlite  # revision/attempt ledger, with WAL
   state/retry-queue.json
@@ -68,18 +70,19 @@ Canonical files are group-readable by `data`.
 
 ## Operate
 
-Verified commands for the installed tick-only version:
+Commands for the installed combined version:
 
 ```bash
 cd /home/avik/GRVT-Historical-Data
-.venv/bin/grvt-data daily --data-dir /srv/grvt --datasets trades
-.venv/bin/grvt-data publish --date 2026-10-15 --data-dir /srv/grvt --datasets trades
-.venv/bin/grvt-data status --data-dir /srv/grvt --datasets trades
-.venv/bin/grvt-data status --check --data-dir /srv/grvt --datasets trades
+.venv/bin/grvt-data daily --data-dir /srv/grvt --datasets trades,ohlcv
+.venv/bin/grvt-data publish --date 2026-10-15 --data-dir /srv/grvt --datasets trades,ohlcv
+.venv/bin/grvt-data status --data-dir /srv/grvt --datasets trades,ohlcv
+.venv/bin/grvt-data status --check --data-dir /srv/grvt --datasets trades,ohlcv
 ```
 
 `daily` downloads pending past dates, yesterday first, then oldest backlog. A
-terminal full day is a no-op. It unions current discovery with retained daily
+terminal full day with exhausted candle progress is a no-op. Partial OHLCV on
+current yesterday is re-enqueued; retained completed ticks are reused. It unions current discovery with retained daily
 metadata, preserving delisted instruments. `publish --date` resumes existing
 sealed work without inventing a revision. Frozen revision dataset scope controls
 recovery, so old mixed work retains its original meaning.
@@ -101,7 +104,7 @@ stale running attempts become interrupted under the next lock owner. The wrapper
 adds a six-hour outer timeout and reaps worker descendants.
 
 `status --check` writes local `state/status-health.json` and appends to
-`logs/status.log`. Tick-only status explicitly marks the depth collector disabled.
+`logs/status.log`. Combined status explicitly marks the depth collector disabled.
 It reports filesystem capacity/free space, revisions, actual cached release asset
 counts and observation times, and retry `oldest_age_seconds`. It sends no external
 notification. Critical-disk verified cleanup runs before new daily work and never
@@ -109,32 +112,43 @@ prunes canonical Parquet or unverified data.
 
 ## Schedule and logs
 
-The reviewed tick-only proof and storage checks passed. The installer verifies
-live hostname `vitalik8` and system timezone UTC, backs up the whole crontab, and
-replaces only its named block while preserving unrelated entries:
+The combined proof and measured storage gate passed. Installed UTC entries:
+
+- **00:30**: combined tick download and recent candles, then bounded history.
+- **03:10, 07:10, 11:10, 15:10, 19:10, 23:10**: accelerated history using
+  `--ohlcv-recent-pages 1 --ohlcv-backfill-pages 4096 --ohlcv-budget-seconds 1800`.
+- Every five minutes: local combined status; **00:45**: user-owned logrotate.
+
+All publication jobs share the CLI publication lock and the 3600-second per-date
+hard deadline. The first combined worker used 1,411.89 seconds. A live concurrent
+wrapper returned 75 and logged its UTC skip. No collector container is required.
+The six backfill runs advance durable cursors; they do not imply that all exchange
+history is already available. Fully exhausted current-yesterday work becomes a
+no-op. Source envelopes remain retained, so storage and immutable snapshot sizes
+grow with history. The 1000-asset release cap continues to fail closed.
+
+The installer replaces the base GRVT block and checks hostname/timezone. The live
+installation additionally includes the bounded history entry above. To reproduce
+that full live schedule, use the verified local deployment helper:
 
 ```bash
-scripts/install-vitalik8.sh --user-logrotate
+.venv/bin/python /srv/grvt/deployment-evidence/install-combined-cron.py
 ```
 
-The installed UTC entries are daily ticks at **00:30**, local status every five
-minutes, and user-owned logrotate at **00:45**. There is no cron/wrapper `flock`;
-the CLI owns locking. `TZ=` on a command does not change cron's firing timezone,
-so the live daemon timezone check is required. The managed block precedes
-unrelated environment assignments to preserve their scope.
+It holds `/home/avik/.local/state/data-collector-crontab.lock` across fresh read,
+backup, installer, history-entry merge, install, and byte-for-byte verification of
+all unrelated entries. Running `scripts/install-vitalik8.sh --user-logrotate`
+alone installs only daily/status/logrotate and removes the extra history entry;
+use the full helper for this deployment. Other cron writers must use the same
+shared lock. Live hostname is `vitalik8`, timezone `Etc/UTC`, cron daemon active.
+The verified backup is
+`/srv/grvt/state/crontab-20261016T211016-1087781.backup`; Apex and GMX schedules
+were preserved. The managed block precedes unrelated environment assignments.
 
-The user-owned logrotate config is `/srv/grvt/state/grvt-data.logrotate`, with
-state `/srv/grvt/state/logrotate.status`. Daily invocation honors weekly rotation,
-keeps eight rotations, compresses older logs, and affects only daily/status logs.
-Restore an inspected crontab backup with `crontab /absolute/path/to/backup`.
-
-The activation backup is
-`/srv/grvt/state/crontab-20261016T203330-218729.backup`. Unrelated entries were
-verified byte-for-byte unchanged. A real concurrent publish/wrapper run logged a
-UTC skip line and returned 75; a terminal wrapper invocation returned 0. Status
-reports depth disabled and the actual observed seven assets on the October 16
-release. The next full UTC-day run and its full-day tick supersession remain
-future observations.
+Logrotate config `/srv/grvt/state/grvt-data.logrotate` uses user-owned state
+`/srv/grvt/state/logrotate.status`: weekly rotation, eight copies, compressed,
+scoped to daily/status logs. The next midnight full-day tick supersession and
+future scheduled executions remain observations to be collected.
 
 No persistent tick collector container is required: GRVT's bounded REST history
 supports daily historical download. The optional legacy depth service is behind
@@ -157,7 +171,7 @@ reconstructs deduplication and query provenance before advancing. Repeated or
 ignored cursors cannot certify partial coverage as complete. Malformed retained
 universe records and saturated instrument discovery fail closed.
 
-See [tick-only operation](docs/tick-only.md),
+See [tick-only override](docs/tick-only.md), [OHLCV collection](docs/grvt-ohlcv.md),
 [archive and recovery details](docs/archive-publication.md), and
 [historical depth protocol](docs/depth-capture.md). The latter describes optional
 legacy behavior, not the current deployed scope. Production inspection evidence
