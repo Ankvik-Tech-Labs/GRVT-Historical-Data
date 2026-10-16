@@ -1,0 +1,31 @@
+{
+  "day": "2026-10-15",
+  "start_ns": 1792022400000000000,
+  "end_ns": 1792108800000000000,
+  "provisional": false,
+  "instruments": {
+    "AAOI_USDT_Perp": {
+      "instrument": "AAOI_USDT_Perp",
+      "start_ns": 1792022400000000000,
+      "end_ns": 1792108800000000000,
+      "cursor": "",
+      "pages": 1,
+      "rows": 412,
+      "seen_cursors": [],
+      "page_fingerprints": [
+        "34f034d3b08722180bf9237a732e416c8213932fb88e46a59f9d9343d734b25f"
+      ],
+      "oldest_ns": 1792022700591488459,
+      "generation": 0,
+      "deduplication": "instrument/trade_id from durable page rows",
+      "pagination_exhausted": true,
+      "complete": true,
+      "api_bound_semantics": "start inclusive; end inclusive; local [start,end)",
+      "path": "/tmp/grvt-task1-live/trades/2026-10-15/AAOI_USDT_Perp/1792022400000000000-1792108800000000000/trades.parquet",
+      "error": null
+    }
+  },
+  "failures": {},
+  "rows": 412,
+  "complete": true
+}
