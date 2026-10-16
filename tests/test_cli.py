@@ -41,7 +41,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
-from test_archive import committed, report
+from test_archive import committed, report, segment
 from test_publish import FakeGitHub
 
 from grvt_data.archive import pending_dates, seal_revision
@@ -120,9 +120,113 @@ def test_finish_unfinished_before_new_seal_and_remote_commit_reconciles(
     with pytest.raises(Crash):
         cli.publish_revision(config, day, 1, github=gh)
     gh.calls.clear()
+    monkeypatch.setattr(
+        "grvt_data.storage.disk_status", lambda *a: {"cleanup_requested": True}
+    )
     assert cli.run_date(config, day, deadline=time.monotonic() + 5) == 0
     assert not any(c[0] in ("upload", "create", "patch") for c in gh.calls)
     assert len(cli.revisions(config, day)) == 1
+
+
+@pytest.mark.parametrize("critical", [True, False], ids=["critical", "normal"])
+def test_worker_prunes_committed_before_failing_discovery_only_when_critical(
+    tmp_path, monkeypatch, critical
+):
+    from types import SimpleNamespace
+
+    from grvt_data import publish
+
+    config = Config(data_dir=tmp_path)
+    old = yesterday() - timedelta(days=2)
+    raw = segment(config, old)
+    bundle = seal_revision(config, old, report(old))
+    gh = FakeGitHub(config)
+    publish.publish_revision(config, old, 1, github=gh)
+    assert cli.revisions(config, old)[0]["pruned"] == 0
+    assert raw.exists() and bundle.exists()
+
+    # A sealed but uncommitted revision and live stream must survive cleanup.
+    uncommitted_day = old + timedelta(days=1)
+    uncommitted_raw = segment(config, uncommitted_day)
+    uncommitted_bundle = seal_revision(config, uncommitted_day, report(uncommitted_day))
+    active = raw.parent / "active.open"
+    active.write_bytes(b"live")
+    monkeypatch.setattr(
+        "grvt_data.storage.shutil.disk_usage",
+        lambda *a: SimpleNamespace(
+            total=1000 * 1024**3, free=(50 if critical else 500) * 1024**3
+        ),
+    )
+    assert cli.disk_status(tmp_path, config)["tier"] == (
+        "critical" if critical else "healthy"
+    )
+    deadline = time.monotonic() + 5
+    events = []
+    original_prune = publish.prune_verified
+
+    def prune(c, now, **kwargs):
+        os.fstat(int(os.environ["GRVT_PUBLICATION_LOCK_FD"]))
+        assert kwargs == {"deadline": deadline, "github": gh}
+        events.append("prune")
+        return original_prune(c, now, **kwargs)
+
+    def github(c, **kwargs):
+        assert kwargs["deadline"] == deadline
+        return gh
+
+    class API:
+        def __init__(self, c, **kwargs):
+            assert kwargs["deadline"] == deadline
+
+        def instruments(self, **kwargs):
+            events.append("instruments")
+            assert raw.exists() is not critical
+            assert bundle.exists() is not critical
+            assert uncommitted_raw.exists() and uncommitted_bundle.exists()
+            assert active.read_bytes() == b"live"
+            raise RuntimeError("venue unavailable")
+
+        def close(self):
+            events.append("close")
+
+    gh.calls.clear()
+    monkeypatch.setattr(publish, "prune_verified", prune)
+    monkeypatch.setattr(cli, "ObservedGitHub", github)
+    monkeypatch.setattr(cli, "GrvtAPI", API)
+    with cli.publication_lock(config, 0) as fd:
+        assert fd is not None
+        with pytest.raises(RuntimeError, match="venue unavailable"):
+            cli.run_date(config, yesterday(), deadline=deadline)
+    assert events == (["prune"] if critical else []) + ["instruments", "close"]
+    assert gh.calls == ([("read",)] if critical else [])
+    assert cli.revisions(config, old)[0]["pruned"] == int(critical)
+    assert cli.revisions(config, uncommitted_day)[0]["status"] == "sealed"
+
+
+def test_worker_critical_cleanup_honors_expired_deadline(tmp_path, monkeypatch):
+    from grvt_data.config import DeadlineExceeded
+
+    config = Config(data_dir=tmp_path)
+    old = yesterday() - timedelta(days=2)
+    raw = segment(config, old)
+    bundle = seal_revision(config, old, report(old))
+    gh = FakeGitHub(config)
+    cli.publish_revision(config, old, 1, github=gh)
+    gh.calls.clear()
+    monkeypatch.setattr(cli, "ObservedGitHub", lambda *a, **kw: gh)
+    monkeypatch.setattr(
+        "grvt_data.storage.disk_status", lambda *a: {"cleanup_requested": True}
+    )
+    monkeypatch.setattr(
+        cli, "GrvtAPI", lambda *a, **kw: pytest.fail("discovery after deadline")
+    )
+    with cli.publication_lock(config, 0) as fd:
+        assert fd is not None
+        with pytest.raises(DeadlineExceeded):
+            cli.run_date(config, yesterday(), deadline=time.monotonic() - 1)
+    assert raw.exists() and bundle.exists()
+    assert gh.calls == []
+    assert cli.revisions(config, old)[0]["pruned"] == 0
 
 
 def test_partial_download_publishes_valid_bytes_but_exits_nonzero(

@@ -130,6 +130,9 @@ def run_date(config, day, *, deadline, end_ns=None, publish_only=False):
         resume_revision(config, day, row["revision"], deadline=deadline)
         publish_revision(config, day, row["revision"], deadline=deadline, github=github)
         incomplete |= not json.loads(row["request_json"])["trade_report"]["complete"]
+    # Reconcile remote commits first, then reclaim proven inputs before new work
+    # can consume critical disk space or fail while retaining the global lock.
+    prune_if_critical(config, datetime.now(UTC), deadline=deadline, github=github)
     if publish_only:
         if not rows:
             raise ValueError("no revision exists for date")
