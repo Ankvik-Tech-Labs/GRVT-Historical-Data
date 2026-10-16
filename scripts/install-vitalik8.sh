@@ -6,6 +6,13 @@ ZONE=$(timedatectl show -p Timezone --value)
 [[ $ZONE == UTC || $ZONE == Etc/UTC ]] || { echo 'refusing: live system timezone must be UTC' >&2; exit 1; }
 ROOT=/home/avik/GRVT-Historical-Data
 DATA=/home/avik/.local/share/grvt-historical-data
+USER_LOGROTATE=0
+if [[ ${1:-} == --user-logrotate && $# == 1 ]]; then
+    USER_LOGROTATE=1
+elif [[ $# != 0 ]]; then
+    echo 'usage: install-vitalik8.sh [--user-logrotate]' >&2
+    exit 2
+fi
 [[ -x "$ROOT/.venv/bin/grvt-data" && -x "$ROOT/scripts/run-daily.sh" ]] || { echo 'deployment venv/wrapper missing' >&2; exit 1; }
 mkdir -p "$DATA"/{state,logs}
 TEMP=$(mktemp -d)
@@ -29,9 +36,18 @@ cat > "$TEMP/new" <<'CRON'
 # BEGIN grvt-data-daily
 30 0 * * * /home/avik/GRVT-Historical-Data/scripts/run-daily.sh >> /home/avik/.local/share/grvt-historical-data/logs/daily.log 2>&1
 */5 * * * * /home/avik/GRVT-Historical-Data/.venv/bin/grvt-data status --check >> /home/avik/.local/share/grvt-historical-data/logs/status.log 2>&1
-# END grvt-data-daily
 CRON
+if [[ $USER_LOGROTATE == 1 ]]; then
+    [[ -x /usr/sbin/logrotate ]] || { echo 'logrotate missing' >&2; exit 1; }
+    install -m 600 "$ROOT/scripts/grvt-data.logrotate" "$DATA/state/grvt-data.logrotate"
+    echo "45 0 * * * /usr/sbin/logrotate --state $DATA/state/logrotate.status $DATA/state/grvt-data.logrotate" >> "$TEMP/new"
+fi
+echo '# END grvt-data-daily' >> "$TEMP/new"
 cat "$TEMP/unmanaged" >> "$TEMP/new"
 crontab "$TEMP/new"
 echo "Installed GRVT cron block; backup: $BACKUP; lock timeout exit: 75"
-echo "Install log rotation separately: sudo install -m 644 $ROOT/scripts/grvt-data.logrotate /etc/logrotate.d/grvt-data"
+if [[ $USER_LOGROTATE == 1 ]]; then
+    echo "Installed user-owned log rotation; state: $DATA/state/logrotate.status"
+else
+    echo "Install log rotation separately: sudo install -m 644 $ROOT/scripts/grvt-data.logrotate /etc/logrotate.d/grvt-data"
+fi

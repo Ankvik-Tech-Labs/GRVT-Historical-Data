@@ -97,6 +97,7 @@ def installer(tmp_path, *, hostname="vitalik8", zone="UTC", old=""):
         f'#!/bin/bash\n[[ "$*" == "show -p Timezone --value" ]] || exit 2\necho {zone}\n',
     )
     crontab = tmp_path / "crontab"
+    executable(fake / "logrotate", "#!/bin/bash\nexit 0\n")
     crontab.write_text(old)
     executable(
         fake / "crontab",
@@ -108,6 +109,9 @@ if [[ $1 == -l ]]; then cat {str(crontab)!r}; else cp "$1" {str(crontab)!r}; fi
     data = tmp_path / "data"
     executable(deploy / ".venv/bin/grvt-data", "#!/bin/bash\nexit 0\n")
     executable(deploy / "scripts/run-daily.sh", "#!/bin/bash\nexit 0\n")
+    (deploy / "scripts/grvt-data.logrotate").write_text(
+        (ROOT / "scripts/grvt-data.logrotate").read_text()
+    )
     # Substitute only the fixed deployment roots. Host checks, cron merge and
     # backup logic are the exact production script, with mock live host tools.
     source = (
@@ -115,6 +119,7 @@ if [[ $1 == -l ]]; then cat {str(crontab)!r}; else cp "$1" {str(crontab)!r}; fi
         .read_text()
         .replace("/home/avik/GRVT-Historical-Data", str(deploy))
         .replace("/home/avik/.local/share/grvt-historical-data", str(data))
+        .replace("/usr/sbin/logrotate", str(fake / "logrotate"))
     )
     script = executable(tmp_path / "install.sh", source)
     env = dict(os.environ, PATH=str(fake) + ":" + os.environ["PATH"])
@@ -144,6 +149,26 @@ def test_installer_preserves_unrelated_cron_backs_up_and_replaces_idempotently(
     assert second.returncode == 0, second.stderr
     assert crontab.read_text() == installed
     assert len(list((data / "state").glob("crontab-*.backup"))) == 2
+
+
+def test_installer_user_logrotate_is_scoped_and_idempotent(tmp_path):
+    old = "7 4 * * * echo unrelated\n"
+    script, env, crontab, data = installer(tmp_path, old=old)
+    for _ in range(2):
+        result = subprocess.run(
+            ["bash", str(script), "--user-logrotate"],
+            env=env, capture_output=True, text=True, check=False,
+        )
+        assert result.returncode == 0, result.stderr
+    installed = crontab.read_text()
+    assert installed.endswith(old)
+    assert installed.count("45 0 * * * ") == 1
+    assert f"--state {data}/state/logrotate.status {data}/state/grvt-data.logrotate" in installed
+    config = data / "state/grvt-data.logrotate"
+    assert config.stat().st_mode & 0o777 == 0o600
+    assert config.read_text() == (ROOT / "scripts/grvt-data.logrotate").read_text()
+    assert "weekly" in config.read_text() and "rotate 8" in config.read_text()
+    assert "compress" in config.read_text()
 
 
 @pytest.mark.parametrize(

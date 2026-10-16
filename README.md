@@ -2,7 +2,9 @@
 
 Recoverable daily public trade downloads for GRVT perpetual instruments, including
 equities, continuous replayable full L2 depth at 100 ms, and verified cumulative
-daily GitHub Release archives.
+daily GitHub Release archives. The repository is private: published/non-draft
+data releases require authorized repository access. “Public” in the publication
+state contract means `draft=false`; it does not change repository visibility.
 
 Use Python 3.11 or later with an isolated environment:
 
@@ -156,20 +158,20 @@ Prepare the fixed checkout and its isolated venv on **vitalik8**:
 
 ```bash
 cd /home/avik/GRVT-Historical-Data
-python3 -m venv .venv
+uv venv --python 3.13 .venv
+.venv/bin/python -m ensurepip
 .venv/bin/python -m pip install -e '.[dev]'
 mkdir -p /home/avik/.local/share/grvt-historical-data/{state,logs}
 export GRVT_UID=$(id -u) GRVT_GID=$(id -g)
-docker compose -f docker/compose.yml build
+docker compose -p grvt-data -f docker/compose.yml build
+docker compose -p grvt-data -f docker/compose.yml up -d
 ```
 
-Run these activation commands only after the measured rollout gate passes:
+The collector starts before the gate to measure actual full-universe production
+traffic. Install the schedule only after the measured rollout gate passes:
 
 ```bash
-export GRVT_UID=$(id -u) GRVT_GID=$(id -g)
-docker compose -f docker/compose.yml up -d
-scripts/install-vitalik8.sh
-sudo install -m 644 scripts/grvt-data.logrotate /etc/logrotate.d/grvt-data
+scripts/install-vitalik8.sh --user-logrotate
 ```
 
 The installer checks the target's live `hostname` is `vitalik8` and live
@@ -202,6 +204,12 @@ authentication alone publishes releases. Stop capture gracefully with
 `docker compose -f docker/compose.yml stop`; inspect with `docker compose -f
 docker/compose.yml ps` and `grvt-data status`. Preserve the data root, including
 SQLite/WAL, receipt/discovery/outage state and retry queue across updates.
+On vitalik8, sudo is unavailable. `--user-logrotate` installs a mode-0600 config
+at `state/grvt-data.logrotate` and adds a third managed entry at 00:45 UTC:
+`/usr/sbin/logrotate --state /home/avik/.local/share/grvt-historical-data/state/logrotate.status /home/avik/.local/share/grvt-historical-data/state/grvt-data.logrotate`.
+The state file is user-owned; the daily invocation honors the weekly policy.
+Without this flag, the installer retains the system logrotate installation
+instructions for hosts with admin access. Use one of these rotation methods.
 Logrotate keeps eight weekly compressed rotations of daily/status logs. For
 restoring committed archive bytes, follow the exact chunk/hash reconstruction in
 [the archive publication contract](docs/archive-publication.md).

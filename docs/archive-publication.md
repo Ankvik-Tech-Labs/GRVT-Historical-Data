@@ -5,6 +5,9 @@ publication lock across its parent, workers and every mutating `gh` subprocess.
 The worker sets `GRVT_PUBLICATION_LOCK_FD`; the publisher passes that actual
 numeric descriptor with `pass_fds`, including when streaming a remote asset.
 Authentication belongs to host-side `gh`. The collector needs no GitHub access.
+In this private repository, “public” below denotes a published/non-draft release
+(`draft=false`), accessible to authorized repository readers. It does not denote
+anonymous access or authorize a repository visibility change.
 
 ```python
 from datetime import date
