@@ -157,13 +157,19 @@ def test_installer_user_logrotate_is_scoped_and_idempotent(tmp_path):
     for _ in range(2):
         result = subprocess.run(
             ["bash", str(script), "--user-logrotate"],
-            env=env, capture_output=True, text=True, check=False,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
         )
         assert result.returncode == 0, result.stderr
     installed = crontab.read_text()
     assert installed.endswith(old)
     assert installed.count("45 0 * * * ") == 1
-    assert f"--state {data}/state/logrotate.status {data}/state/grvt-data.logrotate" in installed
+    assert (
+        f"--state {data}/state/logrotate.status {data}/state/grvt-data.logrotate"
+        in installed
+    )
     config = data / "state/grvt-data.logrotate"
     assert config.stat().st_mode & 0o777 == 0o600
     assert config.read_text() == (ROOT / "scripts/grvt-data.logrotate").read_text()
