@@ -8,6 +8,7 @@ import copy
 import gzip
 import hashlib
 import json
+import math
 import shutil
 import tarfile
 import time
@@ -155,13 +156,7 @@ def _validate_request(config, day, report, end_ns, allow_today):
         cutoff,
     ):
         raise ValueError("trade report window identity mismatch")
-    query_ns = report.get("query_started_at_ns")
-    if type(query_ns) is not int:
-        raise ValueError("trade report lacks actual query-start evidence")
-    if config.trade_indexing_lag_seconds < 0:
-        raise ValueError("negative indexing grace")
-    if query_ns - cutoff < int(config.trade_indexing_lag_seconds * 1e9):
-        raise ValueError("trade query falls inside measured indexing lag window")
+    _validate_query_provenance(config, report, start, cutoff)
     receipt = None
     if allow_today:
         receipt = json.loads(
@@ -170,6 +165,52 @@ def _validate_request(config, day, report, end_ns, allow_today):
         if receipt["cutoff_received_ns"] != end_ns:
             raise ValueError("end_ns must match durable rotate_now receipt")
     return receipt
+
+
+def _validate_query_provenance(config, report, start, cutoff):
+    query_ns = report.get("query_started_at_ns")
+    if "query_started_at_ns" not in report:
+        raise ValueError("trade report lacks actual query-start evidence")
+    if config.trade_indexing_lag_seconds < 0:
+        raise ValueError("negative indexing grace")
+    relevant = [
+        s
+        for s in report["instruments"].values()
+        if s.get("pages", 0) or s.get("complete")
+    ]
+    for state in relevant:
+        started, grace = (
+            state.get("query_started_at_ns"),
+            state.get("indexing_grace_seconds"),
+        )
+        if (
+            state.get("query_provenance_complete") is not True
+            or type(started) is not int
+            or type(grace) not in (int, float)
+            or not math.isfinite(grace)
+            or grace < 0
+            or state.get("queried_pages") != state.get("pages")
+            or not state.get("pages")
+            or (state.get("start_ns"), state.get("end_ns")) != (start, cutoff)
+        ):
+            raise ValueError("trade instrument lacks durable query-start provenance")
+        if started - cutoff < int(config.trade_indexing_lag_seconds * 1e9):
+            raise ValueError(
+                "trade instrument query falls inside measured indexing lag window"
+            )
+    if relevant and (
+        report.get("query_provenance_complete") is not True
+        or query_ns != min(s["query_started_at_ns"] for s in relevant)
+    ):
+        raise ValueError(
+            "trade report query-start provenance disagrees with instruments"
+        )
+    if type(query_ns) is not int and (relevant or query_ns is not None):
+        raise ValueError("trade report lacks actual query-start evidence")
+    if query_ns is not None and query_ns - cutoff < int(
+        config.trade_indexing_lag_seconds * 1e9
+    ):
+        raise ValueError("trade query falls inside measured indexing lag window")
 
 
 def _metadata(config, day, deadline):
@@ -533,6 +574,7 @@ def resume_revision(config: Config, day: date, revision: int, *, deadline=None) 
             return bundle
         request = json.loads(row["request_json"])
         report, cap = request["trade_report"], request["part_bytes"]
+        _validate_query_provenance(config, report, report["start_ns"], report["end_ns"])
         bundle.mkdir(parents=True, exist_ok=True)
         for temp in bundle.rglob(".*.tmp"):
             remaining_seconds(deadline)

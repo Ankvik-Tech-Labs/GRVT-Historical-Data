@@ -141,6 +141,7 @@ def trade_report(config, day=DAY, end_ns=None):
         end_ns=end,
         provisional=end_ns is not None,
         query_started_at_ns=end + 31 * 10**9,
+        query_provenance_complete=True,
         instruments={
             "BTC_USDT_Perp": {
                 "path": str(path),
@@ -150,6 +151,10 @@ def trade_report(config, day=DAY, end_ns=None):
                 "end_ns": end,
                 "rows": 0,
                 "pages": 1,
+                "queried_pages": 1,
+                "query_started_at_ns": end + 31 * 10**9,
+                "indexing_grace_seconds": 30,
+                "query_provenance_complete": True,
             }
         },
     )
@@ -634,3 +639,42 @@ def test_actual_worker_sigkill_resumes_durable_boundaries(
     assert all(
         archive.sha256(bundle / name) == digest for name, digest in parts.items()
     )
+
+
+def test_sealer_checks_each_instrument_even_with_fresh_aggregate(tmp_path):
+    import copy
+
+    config = Config(data_dir=tmp_path)
+    result = trade_report(config)
+    bad = copy.deepcopy(result["instruments"]["BTC_USDT_Perp"])
+    bad["query_started_at_ns"] = result["end_ns"] + 10**9
+    bad["indexing_grace_seconds"] = 0
+    result["instruments"]["AAOI_USDT_Perp"] = bad
+    with pytest.raises(ValueError, match="instrument query.*indexing lag"):
+        seal_revision(config, DAY, result)
+
+
+def test_sealing_resume_rejects_frozen_legacy_query_provenance(tmp_path, monkeypatch):
+    from grvt_data import archive
+
+    config = Config(data_dir=tmp_path)
+    result = trade_report(config)
+    original = archive._parts
+    monkeypatch.setattr(
+        archive, "_parts", lambda *a: (_ for _ in ()).throw(KeyboardInterrupt())
+    )
+    with pytest.raises(KeyboardInterrupt):
+        seal_revision(config, DAY, result)
+    db = publication_db(config)
+    with db:
+        request = json.loads(
+            db.execute("SELECT request_json FROM revisions").fetchone()[0]
+        )
+        request["trade_report"]["instruments"]["BTC_USDT_Perp"].pop(
+            "query_provenance_complete"
+        )
+        db.execute("UPDATE revisions SET request_json=?", (json.dumps(request),))
+    db.close()
+    monkeypatch.setattr(archive, "_parts", original)
+    with pytest.raises(ValueError, match="query-start provenance"):
+        resume_revision(config, DAY, 1)

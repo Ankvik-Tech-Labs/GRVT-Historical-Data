@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import math
 import re
 import time
 from datetime import UTC, date, datetime
@@ -60,6 +61,70 @@ def _check(api):
         api.check_deadline()
 
 
+def _empty_query_evidence():
+    return {
+        "queried_pages": 0,
+        "query_provenance_complete": True,
+        "query_started_at_ns": None,
+        "indexing_grace_seconds": None,
+    }
+
+
+def _observe_query(evidence, query):
+    """Conservative aggregate of accepted page requests, never retry wall time."""
+    query = query if isinstance(query, dict) else {}
+    started, grace = (
+        query.get("query_started_at_ns"),
+        query.get("indexing_grace_seconds"),
+    )
+    valid = (
+        type(started) is int
+        and started >= 0
+        and type(grace) in (int, float)
+        and math.isfinite(grace)
+        and grace >= 0
+    )
+    complete = evidence["query_provenance_complete"] and valid
+    result = {
+        "queried_pages": evidence["queried_pages"] + 1,
+        "query_provenance_complete": complete,
+        "query_started_at_ns": None,
+        "indexing_grace_seconds": None,
+    }
+    if complete:
+        result["query_started_at_ns"] = (
+            min(started, evidence["query_started_at_ns"])
+            if evidence["queried_pages"]
+            else started
+        )
+        result["indexing_grace_seconds"] = (
+            min(grace, evidence["indexing_grace_seconds"])
+            if evidence["queried_pages"]
+            else grace
+        )
+    return result
+
+
+def _timed_pages(api, instrument, start, end, cursor):
+    # trade_pages is lazy: sample BEFORE each next(), which performs that page's
+    # request (including possible retries/rate limiting). This is a conservative
+    # lower bound on request start, never a response-time or retry-time relabel.
+    pages = iter(api.trade_pages(instrument, start, end, cursor))
+    while True:
+        _check(api)
+        timing = {
+            "query_started_at_ns": time.time_ns(),
+            "indexing_grace_seconds": getattr(
+                api, "config", Config()
+            ).trade_indexing_lag_seconds,
+        }
+        try:
+            response = next(pages)
+        except StopIteration:
+            return
+        yield response, timing
+
+
 def _instrument(api, root, instrument, start, end):
     directory = root / instrument / f"{start}-{end}"
     pages = directory / "pages"
@@ -81,6 +146,7 @@ def _instrument(api, root, instrument, start, end):
         "api_bound_semantics": "start inclusive; end inclusive; local [start,end)",
         "path": str(directory / "trades.parquet"),
     }
+    evidence = _empty_query_evidence()
     rows_by_id = {}
     envelopes = sorted(pages.glob("*.json"))
     # The envelope is the commit record. If a process died before progress.json
@@ -97,21 +163,25 @@ def _instrument(api, root, instrument, start, end):
             end,
         ):
             raise ValueError("durable page query identity mismatch")
+        if envelope.get("kind", "page") == "page":
+            evidence = _observe_query(evidence, envelope.get("query_provenance"))
         for row in envelope["rows"]:
             rows_by_id.setdefault(row["trade_id"], row)
+    state = {**state, **evidence}
     sequence = len(envelopes)
     if state["pagination_exhausted"] and progress_path.exists():
         final = json.loads(progress_path.read_text())
         if final.get("complete") and Path(state["path"]).is_file():
-            return final
+            return {**final, **evidence}
 
-    def persist(page_rows, request_cursor, kind="page"):
+    def persist(page_rows, request_cursor, kind="page", query_provenance=None):
         nonlocal sequence
         envelope = {
             "kind": kind,
             "request_cursor": request_cursor,
             "state": state,
             "rows": page_rows,
+            "query_provenance": query_provenance,
         }
         write_json_atomic(pages / f"{sequence:010d}.json", envelope)
         sequence += 1
@@ -124,7 +194,9 @@ def _instrument(api, root, instrument, start, end):
             request_cursor = state["cursor"]
             try:
                 yielded = False
-                for response in api.trade_pages(instrument, start, end, request_cursor):
+                for response, query in _timed_pages(
+                    api, instrument, start, end, request_cursor
+                ):
                     yielded = True
                     _check(api)
                     following = response["next"]
@@ -158,8 +230,10 @@ def _instrument(api, root, instrument, start, end):
                         ):
                             rows_by_id[row["trade_id"]] = row
                             new_rows.append(row)
+                    evidence = _observe_query(evidence, query)
                     state = {
                         **state,
+                        **evidence,
                         "cursor": following,
                         "pages": state["pages"] + 1,
                         "rows": len(rows_by_id),
@@ -174,7 +248,7 @@ def _instrument(api, root, instrument, start, end):
                         "pagination_exhausted": not following,
                         "error": None,
                     }
-                    persist(new_rows, request_cursor)
+                    persist(new_rows, request_cursor, query_provenance=query)
                     request_cursor = following
                     if not following:
                         break
@@ -255,10 +329,8 @@ def download_trades(
         _check(api)
         time.sleep(min(wait, 1.0, remaining_seconds(getattr(api, "deadline", None))))
     _check(api)
-    query_started_at_ns = time.time_ns()
     result = {
-        "query_started_at_ns": query_started_at_ns,
-        "indexing_grace_seconds": grace,
+        "requested_indexing_grace_seconds": grace,
         "day": day.isoformat(),
         "start_ns": start,
         "end_ns": end,
@@ -287,5 +359,27 @@ def download_trades(
         result["rows"] += state["rows"]
         if not state["complete"]:
             result["failures"][instrument] = state["error"]
+    relevant = [
+        s
+        for s in result["instruments"].values()
+        if s.get("pages", 0) or s.get("complete")
+    ]
+    provenance_complete = all(
+        s.get("query_provenance_complete") is True
+        and s.get("queried_pages") == s.get("pages")
+        and type(s.get("query_started_at_ns")) is int
+        for s in relevant
+    )
+    result["query_provenance_complete"] = provenance_complete
+    result["query_started_at_ns"] = (
+        min((s["query_started_at_ns"] for s in relevant), default=None)
+        if provenance_complete
+        else None
+    )
+    result["indexing_grace_seconds"] = (
+        min((s["indexing_grace_seconds"] for s in relevant), default=None)
+        if provenance_complete
+        else None
+    )
     result["complete"] = not result["failures"]
     return result

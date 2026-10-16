@@ -55,9 +55,30 @@ The default `trade_indexing_lag_seconds=30` is an operational buffer above the
 single observed 7.826196144-second visibility sample, not a venue completeness
 guarantee. `download_trades` waits until `end_ns + grace` before querying, with
 shrinking deadline checks; ordinary yesterday-at-00:30 calls incur no wait. The
-report records `query_started_at_ns` and `indexing_grace_seconds`. The sealer
-requires actual query-start evidence outside the configured grace. Retrying uses
-Task 1's durable pages and cursor. Activation remains provisional even after the
+report's `query_started_at_ns` is the earliest relevant **actual page-fetch start**,
+never the retry attempt's clock sample. Each durable page envelope carries
+`query_provenance: {query_started_at_ns, indexing_grace_seconds}` sampled before
+advancing the lazy API iterator (a conservative lower bound including rate limits
+and network retries). Instrument page/checkpoint state aggregates earliest start,
+minimum applied `indexing_grace_seconds`, `queried_pages`, and
+`query_provenance_complete`. Replay rebuilds these aggregates from page envelopes;
+a newer progress checkpoint cannot overwrite their provenance. Complete-cache
+reuse and partial cursor resume preserve earlier page timing and grace.
+The report aggregates the earliest instrument start and minimum applied grace;
+`requested_indexing_grace_seconds` separately records this attempt's configuration.
+Missing evidence makes the aggregate timestamp/grace null and completeness false.
+An empty instrument universe has no actual query and null timing.
+
+The sealer validates every relevant instrument's original window, page count,
+provenance completeness and earliest query against its configured bound, then
+checks the aggregate agrees. Resuming a `sealing` revision applies this gate to
+its frozen request too. Missing legacy provenance or too-early cached queries
+**refuse certification**, even after waiting or fetching later pages; the fix
+never silently relabels old data, drops old pages or invents query timestamps.
+Pagination `complete` alone does not mean indexing provenance is certifiable.
+A genuinely fresh query is required to replace an ineligible cache; an operator
+must preserve existing uncommitted data/ownership when arranging that download.
+Valid durable pages retain Task 1's cursor resume and complete-cache behavior. Activation remains provisional even after the
 wait: the bound approximates exchange time with a receive-clock sample. Before
 publication, `state/retry-queue.json` durably requires a subsequent full-day tick
 download, and keeps that date pending after midnight without needing more depth.

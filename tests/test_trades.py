@@ -462,3 +462,133 @@ def test_expired_deadline_during_indexing_wait_never_completes(tmp_path, monkeyp
         run(tmp_path, api)
     assert not api.calls
     assert not list(tmp_path.rglob("*.parquet"))
+
+
+def test_complete_cache_keeps_actual_early_query_and_cannot_be_recertified(
+    tmp_path, monkeypatch
+):
+    import grvt_data.trades as module
+    from grvt_data.archive import seal_revision
+    from grvt_data.config import Config
+
+    clock = [END + 10**9]
+    monkeypatch.setattr(module.time, "time_ns", lambda: clock[0])
+    initial = API({"": [{"result": [], "next": ""}]})
+    initial.config = Config(data_dir=tmp_path, trade_indexing_lag_seconds=0)
+    run(tmp_path, initial)
+    clock[0] = END + 31 * 10**9
+    retry = API({"": [{"result": [trade("late")], "next": ""}]})
+    retry.config = Config(data_dir=tmp_path)
+    result = run(tmp_path, retry)
+    assert retry.calls == []
+    assert result["rows"] == 0
+    assert result["query_started_at_ns"] == END + 10**9
+    assert result["indexing_grace_seconds"] == 0
+    with pytest.raises(ValueError, match="indexing lag"):
+        seal_revision(retry.config, DAY, result)
+
+
+def test_interrupted_page_resume_preserves_earliest_query_and_page_evidence(
+    tmp_path, monkeypatch
+):
+    import grvt_data.trades as module
+    from grvt_data.archive import seal_revision
+    from grvt_data.config import Config
+
+    clock = [END + 31 * 10**9]
+    monkeypatch.setattr(module.time, "time_ns", lambda: clock[0])
+    first = API(
+        {"": [{"result": [trade("a")], "next": "c"}, RuntimeError("interrupted")]}
+    )
+    result = run(tmp_path, first)
+    page = next(tmp_path.rglob("pages/0000000000.json"))
+    durable = page.read_bytes()
+    assert not result["complete"]
+    clock[0] = END + 61 * 10**9
+    retry = API({"c": [{"result": [trade("b")], "next": ""}]})
+    resumed = run(tmp_path, retry)
+    assert retry.calls == ["c"] and resumed["complete"]
+    assert resumed["query_started_at_ns"] == END + 31 * 10**9
+    assert resumed["instruments"]["BTC_USDT_Perp"]["queried_pages"] == 2
+    assert (
+        json.loads(page.read_text())["query_provenance"]["query_started_at_ns"]
+        == END + 31 * 10**9
+    )
+    assert page.read_bytes() == durable
+    assert seal_revision(Config(data_dir=tmp_path), DAY, resumed).exists()
+
+
+@pytest.mark.parametrize("partial", [False, True])
+def test_missing_legacy_page_provenance_is_not_relabelled_on_reuse(
+    tmp_path, monkeypatch, partial
+):
+    import grvt_data.trades as module
+    from grvt_data.archive import seal_revision
+    from grvt_data.config import Config
+
+    clock = [END + 31 * 10**9]
+    monkeypatch.setattr(module.time, "time_ns", lambda: clock[0])
+    pages = [{"result": [trade("a")], "next": "c" if partial else ""}]
+    if partial:
+        pages.append(RuntimeError("interrupted"))
+    run(tmp_path, API({"": pages}))
+    # Simulate a legacy page and a misleadingly fresh progress checkpoint.
+    page = next(tmp_path.rglob("pages/0000000000.json"))
+    envelope = json.loads(page.read_text())
+    envelope.pop("query_provenance", None)
+    write_json_atomic(page, envelope)
+    progress = next(tmp_path.rglob("progress.json"))
+    state = json.loads(progress.read_text())
+    state.update(query_started_at_ns=END + 90 * 10**9, query_provenance_complete=True)
+    write_json_atomic(progress, state)
+    clock[0] = END + 91 * 10**9
+    retry = API({"c": [{"result": [trade("b")], "next": ""}]})
+    result = run(tmp_path, retry)
+    assert result["query_started_at_ns"] is None
+    assert not result["query_provenance_complete"]
+    assert retry.calls == (["c"] if partial else [])
+    with pytest.raises(ValueError, match="query-start|provenance"):
+        seal_revision(Config(data_dir=tmp_path), DAY, result)
+
+
+def test_interrupted_early_page_cannot_be_hidden_by_new_page_or_fresh_report(
+    tmp_path, monkeypatch
+):
+    import grvt_data.trades as module
+    from grvt_data.archive import seal_revision
+    from grvt_data.config import Config
+
+    clock = [END + 10**9]
+    monkeypatch.setattr(module.time, "time_ns", lambda: clock[0])
+    initial = API(
+        {"": [{"result": [trade("a")], "next": "c"}, RuntimeError("interrupted")]}
+    )
+    initial.config = Config(data_dir=tmp_path, trade_indexing_lag_seconds=0)
+    assert not run(tmp_path, initial)["complete"]
+    clock[0] = END + 31 * 10**9
+    retry = API({"c": [{"result": [trade("b")], "next": ""}]})
+    result = run(tmp_path, retry)
+    assert retry.calls == ["c"] and result["complete"]
+    assert result["query_started_at_ns"] == END + 10**9
+    # Even an incorrectly rewritten top-level summary cannot hide the earlier
+    # relevant instrument data from the sealer's independent per-state check.
+    result["query_started_at_ns"] = clock[0]
+    with pytest.raises(ValueError, match="instrument query.*indexing lag"):
+        seal_revision(Config(data_dir=tmp_path), DAY, result)
+
+
+def test_complete_cache_preserves_valid_provenance_and_makes_no_requests(
+    tmp_path, monkeypatch
+):
+    import grvt_data.trades as module
+
+    clock = [END + 31 * 10**9]
+    monkeypatch.setattr(module.time, "time_ns", lambda: clock[0])
+    first = run(tmp_path, API({"": [{"result": [trade("a")], "next": ""}]}))
+    clock[0] = END + 3600 * 10**9
+    retry = API({})
+    result = run(tmp_path, retry)
+    assert result["complete"] and result["query_provenance_complete"]
+    assert not retry.calls
+    assert result["query_started_at_ns"] == first["query_started_at_ns"]
+    assert result["instruments"] == first["instruments"]
