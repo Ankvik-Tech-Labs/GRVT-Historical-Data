@@ -16,6 +16,31 @@ class Crash(BaseException):
     pass
 
 
+def test_gh_finds_draft_before_tag_exists_and_reads_all_assets(tmp_path, monkeypatch):
+    gh = GitHub(Config(data_dir=tmp_path))
+    calls = []
+
+    def run(args, **kwargs):
+        calls.append(args)
+        if "/releases/tags/" in args[1]:
+            assert kwargs["absent"]
+            return None  # Live GitHub returns 404 until a draft's tag exists.
+        if args[1].endswith("/releases?per_page=100"):
+            assert "--paginate" in args and "--slurp" in args
+            return [
+                [{"id": 1, "tag_name": "unrelated"}],
+                [{"id": 42, "tag_name": f"data-{DAY}", "draft": True}],
+            ]
+        assert args[1].endswith("/releases/42/assets?per_page=100")
+        return [[{"name": "part1"}], [{"name": "part2"}]]
+
+    monkeypatch.setattr(gh, "_run", run)
+    release = gh.release(DAY)
+    assert release["id"] == 42 and release["draft"]
+    assert [a["name"] for a in release["assets"]] == ["part1", "part2"]
+    assert len(calls) == 3
+
+
 class FakeGitHub:
     def __init__(self, config):
         self.config = config
@@ -113,6 +138,62 @@ def test_revision_1_committed_only_once_public(sealed):
     gh.on_patch = check
     assert publish_revision(config, DAY, 1, github=gh)["status"] == "committed"
     assert status(config) == "committed" and not gh.state["draft"]
+
+
+def test_retry_after_draft_creation_without_tag_reuses_actual_release(
+    sealed, monkeypatch
+):
+    config, gh = sealed
+    gh.base = f"repos/{config.repo}"
+    original_create = gh.create
+
+    def create_and_crash(day):
+        original_create(day)
+        raise Crash()
+
+    def run(args, **kwargs):
+        if "/releases/tags/" in args[1]:
+            return (
+                copy.deepcopy(gh.state) if gh.state and not gh.state["draft"] else None
+            )
+        if args[1].endswith("/releases?per_page=100"):
+            return [[], [copy.deepcopy(gh.state)] if gh.state else []]
+        assert args[1].endswith("/releases/100/assets?per_page=100")
+        return [copy.deepcopy(gh.state["assets"])]
+
+    monkeypatch.setattr(gh, "_run", run, raising=False)
+    monkeypatch.setattr(gh, "release", lambda day: GitHub.release(gh, day))
+    monkeypatch.setattr(gh, "create", create_and_crash)
+    with pytest.raises(Crash):
+        publish_revision(config, DAY, 1, github=gh)
+    assert gh.state["id"] == 100 and gh.state["draft"]
+    monkeypatch.setattr(gh, "create", original_create)
+    assert publish_revision(config, DAY, 1, github=gh)["status"] == "committed"
+    assert gh.state["id"] == 100
+    assert sum(call[0] == "create" for call in gh.calls) == 1
+
+
+@pytest.mark.parametrize("ambiguous", [False, True])
+def test_release_list_error_or_ambiguity_never_creates(sealed, monkeypatch, ambiguous):
+    config, gh = sealed
+    gh.base = f"repos/{config.repo}"
+
+    def run(args, **kwargs):
+        if "/releases/tags/" in args[1]:
+            return None
+        if not ambiguous:
+            raise RuntimeError("release list authentication/rate limit failure")
+        return [
+            [{"id": 1, "tag_name": f"data-{DAY}", "draft": True}],
+            [{"id": 2, "tag_name": f"data-{DAY}", "draft": False}],
+        ]
+
+    monkeypatch.setattr(gh, "_run", run, raising=False)
+    monkeypatch.setattr(gh, "release", lambda day: GitHub.release(gh, day))
+    with pytest.raises((RuntimeError, ValueError), match="failure|multiple releases"):
+        publish_revision(config, DAY, 1, github=gh)
+    assert gh.state is None and status(config) == "sealed"
+    assert not [call for call in gh.calls if call[0] == "create"]
 
 
 def test_revision_2_public_body_advances_only_after_all_hashes(sealed):

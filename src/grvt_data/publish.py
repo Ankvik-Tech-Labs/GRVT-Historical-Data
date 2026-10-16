@@ -77,6 +77,21 @@ class GitHub:
         release = self._run(
             ["api", f"{self.base}/releases/tags/data-{day}"], absent=True
         )
+        if release is None:
+            # A draft does not create its Git tag until publication. GitHub's
+            # by-tag endpoint can therefore return 404 for an existing draft.
+            pages = self._run(
+                ["api", f"{self.base}/releases?per_page=100", "--paginate", "--slurp"]
+            )
+            matches = [
+                row
+                for page in pages
+                for row in page
+                if row["tag_name"] == f"data-{day}"
+            ]
+            if len(matches) > 1:
+                raise ValueError("multiple releases for date; fail closed")
+            release = matches[0] if matches else None
         if release is not None:
             pages = self._run(
                 [
