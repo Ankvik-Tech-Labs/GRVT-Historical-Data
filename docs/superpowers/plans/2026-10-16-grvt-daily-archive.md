@@ -10,12 +10,13 @@ are retained; immutable release snapshots reuse verified publication machinery.
 00:30 daily plus six bounded history runs, five-minute status and logrotate are
 installed with all unrelated cron preserved. First actual combined publication
 verified all2024native series recent-complete and368tickhashes unchanged. Full
-historical pagination remains partial; calendar184coverage records currently
-unavailable. See [live evidence](../../deployment-vitalik8.md) and
+historical start-zero API queries subsequently exhausted all2024series in
+revision3; calendar1435partitions derived and367incomplete/open records unavailable.
+API exhaustion does not assert gap-free exchange history. See [live evidence](../../deployment-vitalik8.md) and
 [OHLCV contract](../../grvt-ohlcv.md). Earlier tick-only and mixed sections below
 record prior decisions; this additive section supersedes their active dataset
 selection and scheduling claims. Operational setup is verified; future scheduled
-firings and eventual historical exhaustion are separate pending observations.
+firings and future native-history availability are separate observations.
 
 
 

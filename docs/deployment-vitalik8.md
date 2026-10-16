@@ -1,11 +1,49 @@
 # Verified vitalik8 deployment — 2026-10-16 UTC
 
+## Completion supplement — 21:40 UTC
+
+The bounded accelerator finished successfully at21:38:46UTC in1782.057597s,
+without a tick-download phase:3187additional historical pages,0recentpages.
+All2024native start-zero queries reached actual API pagination exhaustion and all
+recent queries remained complete; zero errors. This supersedes partial-history
+and unavailable-all-months statements in the initial snapshot below. It is API
+query exhaustion, not guaranteed complete/gap-free exchange history: historical
+returned lower bounds differ by interval (1m2026-10-15 versus1d2024-12-06).
+
+Current October15 revision3 pointer SHA
+`29dbe4e60630d2afb3152b145d8c03dab6e8829cc86c6f777a109120d444bcd4`,
+body explicitly `OHLCV: api-exhausted`. Two OHLCV assets:
+
+| Asset suffix | Bytes | SHA256 |
+|---|---:|---|
+|rev03-part01.tar.gz|91,939,599|`6f9fc448a8119130c631746ce116460b567c8f8498f03ef06cbf3ccd8091cd60`|
+|rev03-part02.tar.gz|6,349,749|`a64bc1f7da23ecf8079519ee05f2ed73fb4a9715c48560107d8ee36050d07e99`|
+
+Both names start `grvt-ohlcv-2026-10-15-`. Authenticated restore checked all22621
+archive entries and all11025canonical Parquet files (98,497,611bytes/1,542,632rows)
+against retained bytes and0660:data permissions. All368protectedtick hashes remain
+unchanged. Monthly coverage now has1435derived partitions across all184instruments;
+367missing/open/incomplete month records remain unavailable. Older immutable
+revision2 remains valid as its original partial snapshot.
+
+The exhausted installed wrapper was then actually invoked: exit0 in0.603seconds,
+no output, unchanged revision ledger and no new collection/publication. There is
+no active benchmark or deployment worker left. The existing six bounded history
+cron entries therefore skip exhausted current-yesterday work; next ordinary day
+advances fresh overlap. No cron/config/product changes accompanied this supplement.
+Free space after authenticated restore is751.197GB. Detailed proofs:
+`ohlcv-backfill-completion-summary.json`, `ohlcv-release-proof.json`,
+`ohlcv-exhausted-production-noop.json`, `ohlcv-canonical-interval-bounds.json` in
+`/srv/grvt/deployment-evidence`.
+
+## Initial combined snapshot and deployment history
+
+
 Reviewed product `0d8c1cf7b0c9a9213a964ba7c1077108503c53d1` is deployed from
 `/home/avik/GRVT-Historical-Data` with its isolated Python3.13 environment.
 Implementation218 tests passed; independent review approved; deployment reran25
 OHLCV cases successfully. Source is on draft [PR1](https://github.com/Ankvik-Tech-Labs/GRVT-Historical-Data/pull/1).
-Main remains unmerged. This records a configured, verified pipeline; historical
-backfill is still running and is not claimed complete.
+Main remains unmerged. This records a configured, verified pipeline; the initial snapshot below preceded the completed accelerator supplement above.
 
 ## Canonical data and integrity
 

@@ -21,9 +21,12 @@ collector container; host-side `gh` owns publication authentication.
 Reviewed product `0d8c1cf` is deployed. The first combined cycle completed on
 2026-10-16 in 1,411.89 seconds, published October 15 revision 2, and verified all
 2,024 canonical candle files against authenticated release downloads. All 184
-instruments × 11 native intervals completed recent pagination; historical backfill
-is **partial**. The derived calendar-month interval remains unavailable until a
-closed month has all daily bars. All 368 existing canonical tick hashes were
+instruments × 11 native intervals completed recent pagination. The accelerated
+resume then exhausted all 2,024 start-zero historical API queries and published
+revision 3: **11,025 canonical files, 1,542,632 rows**, including 1,435 derived
+calendar-month partitions. Another 367 incomplete/open month records remain
+unavailable. Exhaustion describes the returned API history; it does not certify
+gap-free exchange history or equal historical depth across intervals. All 368 existing canonical tick hashes were
 preserved. Depth remains stopped.
 
 See [live deployment evidence](docs/deployment-vitalik8.md),
