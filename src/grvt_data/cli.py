@@ -411,12 +411,13 @@ def status(config, *, check=False):
                 # branch; ordinary status and ordinary checks are local-only.
                 recover_date_runs(config)
                 try:
-                    result["cleanup"] = prune_if_critical(
+                    removed = prune_if_critical(
                         config,
                         datetime.now(UTC),
                         deadline=time.monotonic() + 60,
                         github=ObservedGitHub(config, deadline=time.monotonic() + 60),
                     )
+                    result["cleanup"] = [str(path) for path in removed]
                 except Exception as exc:  # noqa: BLE001 — persist cleanup failure in health snapshot
                     result["cleanup"] = f"failed: {exc}"
     if check:

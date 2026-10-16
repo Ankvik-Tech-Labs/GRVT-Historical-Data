@@ -591,3 +591,36 @@ except InterruptedError: sys.exit(143)
         if proc.poll() is None:
             proc.kill()
             proc.wait()
+
+
+def test_status_critical_cleanup_paths_are_json_safe_and_release_lock(
+    tmp_path, monkeypatch
+):
+    config = Config(data_dir=tmp_path)
+    removed = [
+        tmp_path / "staging/2026-10-15/rev01",
+        tmp_path / "raw/depth/2026-10-15/closed.frames",
+    ]
+    monkeypatch.setattr(cli, "disk_status", lambda *a: {"cleanup_requested": True})
+
+    def prune(*args, **kwargs):
+        os.fstat(int(os.environ["GRVT_PUBLICATION_LOCK_FD"]))
+        return removed
+
+    monkeypatch.setattr(cli, "prune_if_critical", prune)
+    snapshot = cli.status(config, check=True)
+    expected = [str(path) for path in removed]
+    assert snapshot["cleanup"] == expected
+    assert json.loads((tmp_path / "state/status-health.json").read_text()) == snapshot
+    log = tmp_path / "logs/status.log"
+    assert [json.loads(line) for line in log.read_text().splitlines()] == [snapshot]
+    with cli.publication_lock(config, 0) as fd:
+        assert fd is not None
+    assert cli.main(["status", "--check", "--data-dir", str(tmp_path)]) == 0
+    persisted = json.loads((tmp_path / "state/status-health.json").read_text())
+    assert persisted["cleanup"] == expected
+    lines = [json.loads(line) for line in log.read_text().splitlines()]
+    assert len(lines) == 2
+    assert lines[-1] == persisted
+    with cli.publication_lock(config, 0) as fd:
+        assert fd is not None
