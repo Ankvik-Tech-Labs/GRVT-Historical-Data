@@ -15,6 +15,7 @@ class Config:
     rest_url: str = "https://market-data.grvt.io"
     ws_url: str = "wss://market-data.grvt.io/ws/full"
     depth_rate_ms: int = 100
+    depth_discovery_interval_seconds: float = 60.0
     requests_per_second: float = 2.0
     request_timeout_seconds: float = 30.0
     max_retries: int = 4

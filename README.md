@@ -1,7 +1,8 @@
 # GRVT Historical Data
 
 Recoverable daily public trade downloads for GRVT perpetual instruments, including
-equities. Continuous depth capture and release publication are subsequent tasks.
+equities, and continuous replayable full L2 depth at 100 ms. Release publication
+is a subsequent task.
 
 Use Python 3.11 or later with an isolated environment:
 
@@ -63,7 +64,7 @@ query requires explicit `end_ns` and produces a separate provisional window;
 a later full-day call starts from midnight in a distinct checkpoint directory.
 Same-day publication must wait beyond the observed indexing lag before sealing.
 
-Discovery records written by the future depth collector use
+Discovery records written by the depth collector use
 `data/state/discovery/YYYY-MM-DD.json` with shape
 `{"instruments": [{"instrument": "AAOI_USDT_Perp", ...}]}`. The downloader unions
 that day's retained metadata with current discovery, keeping delisted instruments.
@@ -75,3 +76,9 @@ Production inspection evidence and its limitations are in
 [tests/fixtures/trades](tests/fixtures/trades/README.md). Runtime data, virtualenvs,
 credentials and generated archives are ignored by Git. No service, schedule or
 release is installed by this package.
+
+Continuous capture and its Unix rotate-now control client are documented in
+[the depth capture contract](docs/depth-capture.md). Run the collector with
+`asyncio.run(collect_depth(config))`; it discovers all active perpetuals, including
+equities, without streaming credentials. Closed CRC-framed compressed segments,
+self-contained checkpoints and explicit outages support independent replay.

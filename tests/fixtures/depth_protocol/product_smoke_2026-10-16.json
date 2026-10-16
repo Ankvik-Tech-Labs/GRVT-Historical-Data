@@ -1,0 +1,29 @@
+{
+  "root": "/tmp/grvt-task2-live-f9bgcnob",
+  "seconds": 17.541272257993114,
+  "subscribed": 184,
+  "ready": 184,
+  "sessions": 10,
+  "rows": {
+    "checkpoint": 2,
+    "raw": 7245,
+    "delta": 7041,
+    "outage": 368,
+    "snapshot": 184
+  },
+  "instruments_with_deltas": 172,
+  "outage_reasons": {
+    "collector_shutdown": 184,
+    "no_midnight_checkpoint": 184
+  },
+  "raw_bytes": 4594193,
+  "cutoff_received_ns": 1792173716634835185,
+  "cutoff_receipt_index": 6766,
+  "open_segments_left": 0,
+  "control_socket_left": false,
+  "stream": "v1.book.d",
+  "rate_ms": 100,
+  "ws_url": "wss://market-data.grvt.io/ws/full",
+  "discovery": "all active perpetuals, including equities",
+  "note": "Short read-only product smoke; not the sustained Task5 rollout sizing gate."
+}
