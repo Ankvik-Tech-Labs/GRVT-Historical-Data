@@ -101,7 +101,18 @@ class GrvtAPI:
                             raise CursorRejected(message)
                         raise APIError(f"HTTP {response.status_code}: {message}")
                     result = json.loads(body)
-                    if not isinstance(result, dict) or "result" not in result:
+                    unwrapped = {
+                        "supported_assets": ("funding", "spot"),
+                        "get_all_collateral_asset_info": ("assets",),
+                        "margin_rules": ("instrument", "risk_brackets"),
+                    }
+                    if not isinstance(result, dict) or (
+                        "result" not in result
+                        and not (
+                            route in unwrapped
+                            and all(key in result for key in unwrapped[route])
+                        )
+                    ):
                         raise APIError(f"invalid API response: {result!r}")
                     return result
             except (httpx.TransportError, httpx.HTTPStatusError) as exc:
@@ -116,7 +127,7 @@ class GrvtAPI:
         response = self._post(
             "instruments",
             {
-                "kind": ["PERPETUAL"],
+                "kind": ["PERPETUAL", "FUTURE", "CALL", "PUT", "STABLE_PERP"],
                 "is_active": active,
                 "limit": self.config.instrument_limit,
             },
@@ -158,13 +169,15 @@ class GrvtAPI:
             seen.add(following)
             cursor = following
 
-    def candle_page(self, instrument, interval, start_ns, end_ns, cursor=""):
+    def candle_page(
+        self, instrument, interval, start_ns, end_ns, cursor="", *, price_type="TRADE"
+    ):
         response = self._post(
             "kline",
             {
                 "instrument": instrument,
                 "interval": interval,
-                "type": "TRADE",
+                "type": price_type,
                 "start_time": str(start_ns),
                 "end_time": str(end_ns),
                 "limit": 1000,
@@ -176,4 +189,43 @@ class GrvtAPI:
         response.setdefault("next", "")
         if not isinstance(response["next"], str):
             raise APIError("invalid candle cursor")
+        return response
+
+    def market_snapshot(self, route, instrument=None):
+        allowed = {
+            "all_instruments",
+            "currency",
+            "supported_assets",
+            "get_all_collateral_asset_info",
+            "margin_rules",
+            "ticker",
+            "mini",
+        }
+        if route not in allowed:
+            raise ValueError("not a public non-depth snapshot endpoint")
+        payload = {"instrument": instrument} if instrument is not None else {}
+        if route == "all_instruments":
+            payload = {
+                "is_active": False,
+                "kinds": ["PERPETUAL", "FUTURE", "CALL", "PUT", "STABLE_PERP"],
+            }
+        return self._post(route, payload)
+
+    def funding_page(self, instrument, aggregation, start_ns, end_ns, cursor=""):
+        response = self._post(
+            "funding",
+            {
+                "instrument": instrument,
+                "agg_type": aggregation,
+                "start_time": str(start_ns),
+                "end_time": str(end_ns),
+                "cursor": cursor,
+                "limit": 1000,
+            },
+        )
+        if not isinstance(response["result"], list):
+            raise APIError("funding response missing result list")
+        response.setdefault("next", "")
+        if not isinstance(response["next"], str):
+            raise APIError("invalid funding cursor")
         return response

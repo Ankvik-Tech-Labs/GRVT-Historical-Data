@@ -20,8 +20,9 @@ from pathlib import Path
 
 from .api import GrvtAPI
 from .archive import pending_dates, resume_revision, retry_status, seal_revision
-from .config import Config, DeadlineExceeded
+from .config import PUBLIC_DATASETS, Config, DeadlineExceeded
 from .depth import collect_depth, depth_control, persist_discovery
+from .market import collect_market, market_status
 from .ohlcv import collect_ohlcv
 from .publish import GitHub, prune_if_critical, prune_verified, publish_revision
 from .storage import (
@@ -193,6 +194,16 @@ def run_date(config, day, *, deadline, end_ns=None, publish_only=False):
                     end_ns=end_ns,
                     deadline=deadline,
                 )
+            market_report = None
+            if config.market_enabled:
+                market_report = collect_market(
+                    api,
+                    config.data_dir,
+                    day,
+                    sorted(set(instruments) | retained),
+                    end_ns=end_ns,
+                    deadline=deadline,
+                )
         finally:
             api.close()
         seal_revision(
@@ -203,12 +214,15 @@ def run_date(config, day, *, deadline, end_ns=None, publish_only=False):
             allow_today=end_ns is not None,
             end_ns=end_ns,
             **({"ohlcv_report": ohlcv_report} if config.ohlcv_enabled else {}),
+            **({"market_report": market_report} if config.market_enabled else {}),
         )
         row = revisions(config, day)[-1]
         publish_revision(config, day, row["revision"], deadline=deadline, github=github)
         incomplete |= not report["complete"]
         if config.ohlcv_enabled:
             incomplete |= bool(ohlcv_report.get("failures"))
+        if config.market_enabled:
+            incomplete |= bool(market_report.get("failures"))
     prune_verified(config, datetime.now(UTC), deadline=deadline, github=github)
     return int(incomplete)
 
@@ -441,6 +455,9 @@ def status(config, *, check=False):
             "instruments": heartbeat.get("instruments", {}),
         },
         "datasets": list(config.datasets),
+        "market": market_status(config.data_dir)
+        if config.market_enabled
+        else {"enabled": False},
         "ohlcv": json.loads((config.data_dir / "state/ohlcv/status.json").read_text())
         if config.ohlcv_enabled
         and (config.data_dir / "state/ohlcv/status.json").exists()
@@ -527,10 +544,8 @@ def main(argv=None):
         command.add_argument("--data-dir", type=Path, default=DEFAULT_ROOT)
         command.add_argument(
             "--datasets",
-            choices=("trades", "trades,depth", "trades,ohlcv"),
-            default="trades,depth"
-            if name in ("depth", "rotate-now")
-            else "trades,ohlcv",
+            choices=("trades", "trades,depth", "trades,ohlcv", "all"),
+            default="trades,depth" if name in ("depth", "rotate-now") else "all",
         )
         if name in ("daily", "publish"):
             command.add_argument("--repo", default=Config.repo)
@@ -542,6 +557,8 @@ def main(argv=None):
             command.add_argument("--ohlcv-recent-pages", type=int, default=4096)
             command.add_argument("--ohlcv-backfill-pages", type=int, default=128)
             command.add_argument("--ohlcv-budget-seconds", type=positive, default=1800)
+            command.add_argument("--market-page-budget", type=int, default=2200)
+            command.add_argument("--market-budget-seconds", type=positive, default=1500)
             command.add_argument("--allow-today", action="store_true")
             command.add_argument("--end-time-ns", type=int64)
         if name == "publish":
@@ -551,12 +568,16 @@ def main(argv=None):
     args = parser.parse_args(argv)
     config = Config(
         data_dir=args.data_dir.resolve(),
-        datasets=tuple(args.datasets.split(",")),
+        datasets=PUBLIC_DATASETS
+        if args.datasets == "all"
+        else tuple(args.datasets.split(",")),
         repo=getattr(args, "repo", Config.repo),
         per_date_deadline_seconds=getattr(args, "per_date_deadline_seconds", 3600),
         ohlcv_recent_pages=getattr(args, "ohlcv_recent_pages", 4096),
         ohlcv_backfill_pages=getattr(args, "ohlcv_backfill_pages", 128),
         ohlcv_budget_seconds=getattr(args, "ohlcv_budget_seconds", 1800),
+        market_page_budget=getattr(args, "market_page_budget", 2200),
+        market_budget_seconds=getattr(args, "market_budget_seconds", 1500),
     )
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s"

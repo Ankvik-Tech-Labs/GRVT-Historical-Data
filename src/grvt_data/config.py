@@ -6,6 +6,7 @@ from pathlib import Path
 
 Instrument = dict[str, object]
 Trade = dict[str, object]
+PUBLIC_DATASETS = ("trades", "ohlcv", "funding", "ticker", "metadata", "ohlcv_extra")
 
 
 @dataclass(frozen=True)
@@ -33,13 +34,22 @@ class Config:
     ohlcv_recent_pages: int = 4096
     ohlcv_backfill_pages: int = 128
     ohlcv_budget_seconds: float = 1800.0
+    market_page_budget: int = 2200
+    market_budget_seconds: float = 1500.0
     datasets: tuple[str, ...] = ("trades", "depth")
 
     def __post_init__(self):
         # JSON worker payloads contain lists; normalize them at the boundary.
         object.__setattr__(self, "datasets", tuple(self.datasets))
-        if self.datasets not in (("trades",), ("trades", "depth"), ("trades", "ohlcv")):
-            raise ValueError("datasets must be trades, trades,depth or trades,ohlcv")
+        if self.datasets not in (
+            ("trades",),
+            ("trades", "depth"),
+            ("trades", "ohlcv"),
+            PUBLIC_DATASETS,
+        ):
+            raise ValueError(
+                "datasets must be trades, trades,depth, trades,ohlcv or all public data"
+            )
 
         if (
             self.ohlcv_recent_pages < 1
@@ -47,6 +57,12 @@ class Config:
             or self.ohlcv_budget_seconds <= 0
         ):
             raise ValueError("OHLCV budgets must be positive")
+        if self.market_page_budget < 1 or self.market_budget_seconds <= 0:
+            raise ValueError("market data budgets must be positive")
+
+    @property
+    def market_enabled(self):
+        return "funding" in self.datasets
 
     @property
     def ohlcv_enabled(self):

@@ -1,3 +1,10 @@
+# October 18 all-public extension
+
+The expanded collector adds funding, full/mini tickers, reference snapshots and
+all remaining native candle views. See [dataset contracts](grvt-public-data.md).
+Deployment proof for this additive rollout is recorded below once measured;
+the October 16 sections remain the original verified baseline.
+
 # Verified vitalik8 deployment — 2026-10-16 UTC
 
 ## Completion supplement — 21:40 UTC

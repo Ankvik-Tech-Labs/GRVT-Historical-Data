@@ -1,3 +1,13 @@
+# October 18 scope extension
+
+The user now requires every public GRVT market-data family except order-book
+depth, including funding. [Public dataset contracts](../../grvt-public-data.md)
+define the additive extension: all eighteen native intervals/four price types,
+four funding aggregations, daily full/mini tickers and reference snapshots.
+Existing immutable releases and completed requirements below retain their historical
+meaning. Current CLI/default scheduled mode is `all`; depth stays disabled.
+Historical coverage is explicitly partial until each API cursor is exhausted.
+
 # GRVT daily tick archive design
 
 ## Latest additive scope — deployed ticks plus historical OHLCV

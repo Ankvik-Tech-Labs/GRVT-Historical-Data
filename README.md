@@ -1,10 +1,14 @@
 # GRVT Historical Data
 
-Daily historical **trade ticks and incremental TRADE OHLCV** for all active GRVT
-perpetual instruments, including equities, with retained canonical Parquet under
-`/srv/grvt` and verified GitHub Release archives built from the same data. Order-book depth is disabled
-for this setup. Earlier depth captures, state, and published assets are preserved
-as historical evidence; new tick-only revisions emit no new depth assets.
+Daily historical **trade ticks, funding, all native TRADE/MARK/INDEX/MID candles,
+full and mini tickers, and market reference data** for GRVT, retained under
+`/srv/grvt` and published as verified GitHub Release archives from the same bytes.
+Order-book depth is excluded. Earlier depth captures and published assets remain
+historical evidence; this setup creates no new depth assets.
+
+The October 18 expansion is described in [public dataset contracts](docs/grvt-public-data.md).
+Historical funding/candles continue from durable cursors; ticker/reference data
+are current observations with explicit timestamps, not fabricated past snapshots.
 
 The repository is private. Published/non-draft releases require authorized
 repository access; `draft=false` does not change repository visibility.
@@ -18,7 +22,9 @@ isolated `.venv`. The canonical data and runtime root is **`/srv/grvt`**, owned 
 checksum-verified copy. No GitHub credentials are stored in the data root or a
 collector container; host-side `gh` owns publication authentication.
 
-Reviewed product `0d8c1cf` is deployed. The first combined cycle completed on
+The following October 16 evidence describes the earlier trade/OHLCV baseline;
+October 18 all-public rollout evidence is recorded separately in the deployment guide.
+Reviewed baseline product `0d8c1cf` was deployed. The first combined cycle completed on
 2026-10-16 in 1,411.89 seconds, published October 15 revision 2, and verified all
 2,024 canonical candle files against authenticated release downloads. All 184
 instruments × 11 native intervals completed recent pagination. The accelerated
@@ -42,7 +48,12 @@ See [live deployment evidence](docs/deployment-vitalik8.md),
     progress.json        # durable window/coverage metadata
     pages/               # transient resumable REST envelopes
   ohlcv/INTERVAL/INSTRUMENT/YYYY-MM.parquet  # retained canonical candles
-  state/ohlcv/             # retained query envelopes, cursors and coverage
+  funding/AGGREGATION/INSTRUMENT/YYYY-MM.parquet
+  ohlcv_extra/TYPE/INTERVAL/INSTRUMENT/YYYY-MM.parquet
+  ticker/snapshots/OBSERVED_DAY/ROUTE/INSTRUMENT.json
+  metadata/snapshots/OBSERVED_DAY/ROUTE/INSTRUMENT.json
+  state/market/            # added-dataset pages, cursors, snapshots and coverage
+  state/ohlcv/             # retained original candle query evidence
   staging/YYYY-MM-DD/revNN/  # transient immutable build bytes
   state/publication.sqlite  # revision/attempt ledger, with WAL
   state/retry-queue.json
@@ -73,14 +84,14 @@ Canonical files are group-readable by `data`.
 
 ## Operate
 
-Commands for the installed combined version:
+Commands for the all-public version:
 
 ```bash
 cd /home/avik/GRVT-Historical-Data
-.venv/bin/grvt-data daily --data-dir /srv/grvt --datasets trades,ohlcv
-.venv/bin/grvt-data publish --date 2026-10-15 --data-dir /srv/grvt --datasets trades,ohlcv
-.venv/bin/grvt-data status --data-dir /srv/grvt --datasets trades,ohlcv
-.venv/bin/grvt-data status --check --data-dir /srv/grvt --datasets trades,ohlcv
+.venv/bin/grvt-data daily --data-dir /srv/grvt --datasets all
+.venv/bin/grvt-data publish --date 2026-10-15 --data-dir /srv/grvt --datasets all
+.venv/bin/grvt-data status --data-dir /srv/grvt --datasets all
+.venv/bin/grvt-data status --check --data-dir /srv/grvt --datasets all
 ```
 
 `daily` downloads pending past dates, yesterday first, then oldest backlog. A
@@ -135,7 +146,7 @@ installation additionally includes the bounded history entry above. To reproduce
 that full live schedule, use the verified local deployment helper:
 
 ```bash
-.venv/bin/python /srv/grvt/deployment-evidence/install-combined-cron.py
+.venv/bin/python /srv/grvt/deployment-evidence/install-all-public-cron.py
 ```
 
 It holds `/home/avik/.local/state/data-collector-crontab.lock` across fresh read,
@@ -150,8 +161,8 @@ were preserved. The managed block precedes unrelated environment assignments.
 
 Logrotate config `/srv/grvt/state/grvt-data.logrotate` uses user-owned state
 `/srv/grvt/state/logrotate.status`: weekly rotation, eight copies, compressed,
-scoped to daily/status logs. The next midnight full-day tick supersession and
-future scheduled executions remain observations to be collected.
+scoped to daily/status logs. Subsequent full-day releases have run successfully; each rollout records its
+actual latest verified release in the deployment evidence.
 
 No persistent tick collector container is required: GRVT's bounded REST history
 supports daily historical download. The optional legacy depth service is behind

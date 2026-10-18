@@ -17,7 +17,7 @@ from test_publish import FakeGitHub
 
 from grvt_data import archive, cli, ohlcv
 from grvt_data.api import CursorRejected, GrvtAPI
-from grvt_data.config import Config, DeadlineExceeded
+from grvt_data.config import PUBLIC_DATASETS, Config, DeadlineExceeded
 from grvt_data.publish import prune_verified, publish_revision
 from grvt_data.storage import write_json_atomic
 from grvt_data.trades import window_bounds
@@ -421,8 +421,10 @@ def test_default_cli_combined_explicit_legacy_and_budgets(tmp_path, monkeypatch)
     seen = []
     monkeypatch.setattr(cli, "daily", lambda c, **kw: seen.append(c) or 0)
     cli.main(["daily", "--ohlcv-backfill-pages", "3", "--ohlcv-budget-seconds", "9"])
-    assert seen[-1].datasets == ("trades", "ohlcv")
+    assert seen[-1].datasets == PUBLIC_DATASETS
     assert seen[-1].ohlcv_backfill_pages == 3 and seen[-1].ohlcv_budget_seconds == 9
+    cli.main(["daily", "--datasets", "trades,ohlcv"])
+    assert seen[-1].datasets == ("trades", "ohlcv")
     cli.main(["daily", "--datasets", "trades"])
     assert seen[-1].datasets == ("trades",)
     assert Config().datasets == ("trades", "depth")

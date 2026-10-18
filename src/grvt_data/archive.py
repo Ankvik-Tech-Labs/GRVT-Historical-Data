@@ -145,6 +145,15 @@ def pending_dates(config: Config, today: date) -> set[date]:
         )
         if snapshot.get("status") != "api-exhausted":
             pending.add(yesterday)
+    if config.market_enabled:
+        row = latest.get(yesterday)
+        snapshot = (
+            json.loads(row["manifest_json"]).get("market", {})
+            if row and row["manifest_json"]
+            else {}
+        )
+        if not snapshot.get("latest_snapshot", {}).get("complete"):
+            pending.add(yesterday)
     return {d for d in pending if d < today}
 
 
@@ -248,8 +257,24 @@ def seal_revision(
     allow_today=False,
     deadline=None,
     ohlcv_report=None,
+    market_report=None,
 ) -> Path:
     receipt = _validate_request(config, day, trade_report, end_ns, allow_today)
+    if config.market_enabled and (market_report is None or ohlcv_report is None):
+        raise ValueError("all-public mode requires candle and market coverage reports")
+    if market_report is not None and (
+        market_report.get("cutoff_ns") != trade_report["end_ns"]
+        or set(market_report.get("datasets", {}))
+        != {"funding", "ticker", "metadata", "ohlcv_extra"}
+    ):
+        raise ValueError("market report scope/window mismatch")
+    if market_report is not None:
+        snapshot_files = market_report["files"] + (ohlcv_report or {}).get("files", [])
+        # Canonical bytes already exist; reserve frozen copies, optional chunks,
+        # tar output and filesystem overhead before starting another revision.
+        peak = 4 * sum(e["size"] + 4096 for e in snapshot_files)
+        if shutil.disk_usage(config.data_dir).free < peak + config.hard_stop_free_bytes:
+            raise OSError("insufficient free space for public-data archive staging")
     if not 1024 <= config.archive_part_bytes < 1024**3:
         raise ValueError("archive_part_bytes must be >=1024 and <1 GiB")
     db = publication_db(config)
@@ -297,6 +322,39 @@ def seal_revision(
                     frozen.append(record)
                 request["ohlcv_report"] = ohlcv_report
                 request["ohlcv_entries"] = frozen
+            if market_report is not None:
+                bundle = bundle_path(config, day, revision)
+                frozen = []
+                allowed = {"funding", "ticker", "metadata", "ohlcv_extra"}
+                for entry in market_report["files"]:
+                    remaining_seconds(deadline)
+                    group = entry["dataset"]
+                    if group not in allowed:
+                        raise ValueError("invalid market snapshot dataset")
+                    source = config.data_dir / entry["path"]
+                    source.resolve().relative_to(config.data_dir.resolve())
+                    if not entry["path"].startswith(
+                        (
+                            group + "/",
+                            "state/market/series/" + group + "/",
+                            "state/market/pages/" + group + "/",
+                        )
+                    ):
+                        raise ValueError("invalid market snapshot path")
+                    target = bundle / "entries/market" / group / entry["path"]
+                    _atomic(
+                        target,
+                        lambda temp, source=source: shutil.copyfile(source, temp),
+                    )
+                    record = _record(target, bundle, deadline) | {"dataset": group}
+                    if (record["sha256"], record["size"]) != (
+                        entry["sha256"],
+                        entry["size"],
+                    ):
+                        raise ValueError("market snapshot changed before freeze")
+                    frozen.append(record)
+                request["market_report"] = market_report
+                request["market_entries"] = frozen
             db.execute(
                 "INSERT INTO revisions(day,revision,status,request_json) VALUES (?,?,?,?)",
                 (str(day), revision, "sealing", json.dumps(request, sort_keys=True)),
@@ -719,6 +777,42 @@ def resume_revision(config: Config, day: date, revision: int, *, deadline=None) 
             ohlcv_assets = _parts(
                 config, db, day, revision, "ohlcv", ohlcv_entries, bundle, cap, deadline
             )
+        market_assets, market_entries = (
+            [],
+            copy.deepcopy(request.get("market_entries", [])),
+        )
+        if "market_report" in request:
+            if not all(_valid(entry, bundle, deadline) for entry in market_entries):
+                raise ValueError("frozen market snapshot mismatch")
+            for group, coverage in request["market_report"]["datasets"].items():
+                if group not in {"funding", "ticker", "metadata", "ohlcv_extra"}:
+                    raise ValueError("invalid frozen market dataset")
+                entries = [e for e in market_entries if e["dataset"] == group]
+                evidence = bundle / "entries/market" / group / "coverage.json"
+                write_json_atomic(
+                    evidence,
+                    {
+                        "snapshot_at_ns": request["market_report"]["snapshot_at_ns"],
+                        "cutoff_ns": request["market_report"]["cutoff_ns"],
+                        **coverage,
+                    },
+                )
+                record = _record(evidence, bundle, deadline) | {"dataset": group}
+                market_entries.append(record)
+                entries.append(record)
+                market_assets.extend(
+                    _parts(
+                        config,
+                        db,
+                        day,
+                        revision,
+                        group.replace("_", "-"),
+                        entries,
+                        bundle,
+                        cap,
+                        deadline,
+                    )
+                )
         prior = db.execute(
             "SELECT manifest_json FROM revisions WHERE day=? AND revision<? ORDER BY revision DESC LIMIT 1",
             (str(day), revision),
@@ -744,6 +838,15 @@ def resume_revision(config: Config, day: date, revision: int, *, deadline=None) 
             )
             section["coverage_clock"] = (
                 "snapshot_at_ns across historical opens; independent of tick day"
+            )
+        if "market_report" in request:
+            section = manifest.setdefault("market", {"assets": [], "files": []})
+            section["assets"].extend(market_assets)
+            section["files"].append({"revision": revision, "entries": market_entries})
+            section["latest_snapshot"] = request["market_report"]
+            section["snapshot_revision"] = revision
+            section["status"] = (
+                "api-exhausted" if request["market_report"]["complete"] else "partial"
             )
         manifest["revision"] = revision
         manifest["requested_interval_ns"] = list(window_bounds(day))
@@ -870,7 +973,11 @@ def resume_revision(config: Config, day: date, revision: int, *, deadline=None) 
         journal = {
             "day": str(day),
             "revision": revision,
-            "assets": depth_assets + trade_assets + ohlcv_assets + [manifest_asset],
+            "assets": depth_assets
+            + trade_assets
+            + ohlcv_assets
+            + market_assets
+            + [manifest_asset],
         }
         write_json_atomic(journal_path, journal)
         _finish_seal(db, day, revision, manifest, journal)
