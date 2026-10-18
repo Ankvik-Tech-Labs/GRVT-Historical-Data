@@ -1,9 +1,76 @@
+## Reviewed continuation and recurring setup — October 18 08:03 UTC
+
+Reviewed product `2027a0641df5403f5b462d13d6cab9a56d466ffa` completed a real
+continuation in **251.95 seconds, exit 0**, with zero failures. Its 256 history
+requests reused all ticker/reference observations and the original completed
+trade report exactly. No completed tick window was downloaded again.
+
+Current [October 17 release](https://github.com/Ankvik-Tech-Labs/GRVT-Historical-Data/releases/tag/data-2026-10-17) is revision 3 with active manifest
+SHA `c382bb021a250124f8550a2129f79e181eab690059b7489b1b061780352b3956` and **20 immutable assets**. Authenticated restore
+verified **6,254** new-family entries and matched all
+retained source hashes. All 12 previously public assets and **736** protected
+tick hashes remain unchanged. Canonical/snapshot data is data-group readable.
+
+| Added family | Actual progress at this revision |
+|---|---|
+| Funding | 525/736 recent queries; 227 returned historical queries exhausted; 2,980 canonical files |
+| Extra TRADE/MARK/INDEX/MID candles | 69/11,224 recent queries certified under the corrected overlap policy; 95 historical queries exhausted; 1,307 canonical files |
+| Full/mini tickers | 368/368 current observations |
+| Market reference | 188/188 current snapshots, including 194 registry records |
+
+Historical coverage remains partial. Legacy short-overlap progress is deliberately
+not certified until repair, so recent-count comparisons across policy versions are
+not monotonic; canonical bytes and original history evidence remain retained.
+Added source/evidence bytes: **151,070,318**. Measured snapshot input including
+existing candles is 1,090,213,721 bytes; four-copy staging reserve 4,360,854,884 bytes
+plus the 2 GiB hard stop fits 687,527,981,056 free bytes: **PASS**.
+
+At **08:03:14 UTC** the shared cron lock covered a fresh read, backup, replacement
+and exact read-back. Only three GRVT dataset arguments changed to `--datasets all`:
+00:30 daily, six history slots 03:10/07:10/11:10/15:10/19:10/23:10, and */5 status.
+00:45 logrotate and all text outside GRVT's marker, including Apex/GMX, are byte
+identical. Backup: `/srv/grvt/state/crontab-all-public-20261018T080314638143Z.backup`. Reproducible helper:
+`/srv/grvt/deployment-evidence/install-all-public-cron.py`. Actual `status --check`
+exited 0. Depth remains stopped; no book endpoint or subscription was enabled.
+
+A separately monitored bounded seed advances the remaining saved funding/candle
+queries using up to eight 30-minute stages; ordinary scheduled continuation owns
+any work remaining afterward. Each iteration publishes its verified partial
+snapshot before the next. This is not a claim of complete or gap-free history.
+Portable dataset contract: [all public data](grvt-public-data.md). Detailed local
+proofs: `release-proof-rev03.json`, `cron-proof.json`, `storage-proof.json`, and
+`historical-seed-progress.json` in `/srv/grvt/deployment-evidence/all-public-20261018`.
+
 # October 18 all-public extension
 
 The expanded collector adds funding, full/mini tickers, reference snapshots and
 all remaining native candle views. See [dataset contracts](grvt-public-data.md).
-Deployment proof for this additive rollout is recorded below once measured;
-the October 16 sections remain the original verified baseline.
+The first actual all-public cycle ran October 18 07:45–07:56 UTC in 664.90 seconds.
+It published October 17 revision 2 on the existing private release, preserving all
+four earlier asset IDs/digests. Active manifest SHA:
+`86c8feb408d5afa26919899eae18ff74bc1893ec16f8558bf5aa273d80e48990`.
+
+Authenticated download independently verified all four new dataset archives and
+3,926 entries, compared all retained source hashes, and preserved 736 canonical
+tick hashes. New observed snapshots: 368 full/mini tickers and 188 reference
+objects (including the complete 194-record registry). Funding visited all 184
+active native-interval markets; total funding history coverage was 341/736 recent
+queries and 161/736 returned historical queries exhausted. Additional candles were
+100/11,224 recent and 65/11,224 historical queries exhausted, across all four price
+types. Canonical additions were 2,048 funding and 423 additional candle files.
+Retained new source/evidence bytes total 90,775,259. Coverage is explicitly partial.
+
+The first run's final request reached the configured 600-second stage limit;
+its partial revision was correctly committed/remote-verified/pruned, but the
+old handler recorded that expected limit as a failure/exit 1. Reviewed correction
+`2027a06` distinguishes soft stage limits from the enforced parent deadline.
+Reviewed long-candle correction `b01c69e` uses duration-aware overlap and repairs
+saved legacy states; snapshot JSON also receives data-group mode 0660. Full
+245-test suite and source/tests lint+format pass; the independent reviewer approved
+both fixes and independently ran all 27 market cases and extra recovery probes.
+A subsequent bounded continuation verifies the corrected runtime before scheduling.
+
+The October 16 sections below remain the original verified baseline.
 
 # Verified vitalik8 deployment — 2026-10-16 UTC
 
