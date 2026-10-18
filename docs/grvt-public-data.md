@@ -52,7 +52,7 @@ snapshot API call. Public funding rates are distinct from private funding paymen
 Raw page envelopes are written before canonical replacement and cursor advance.
 A failed merge replays the durable page without another HTTP request. Cursor
 rejection starts a new generation and retains the rejected generation's evidence.
-Snapshot and page hashes are checked on reuse. Canonical files are atomic Parquet
+Snapshot and page hashes are checked on reuse. Canonical files are atomic Parquet and snapshot JSON
 mode 0660 under the data-group setgid tree. Evidence and progress live in
 `state/market/pages` and `state/market/series`; `state/market/status.json` exposes
 counts by aggregation/price type, actual observed ranges and partial failures.

@@ -130,12 +130,15 @@ def test_all_aggregations_prices_intervals_and_lossless_snapshots(tmp_path):
         "all",
         "fields",
     ]
+    assert ticker.stat().st_mode & 0o777 == 0o660
+    ticker.chmod(0o600)  # An earlier deployment's cached snapshots remain reusable.
     assert "files" not in market.market_status(tmp_path)
     before = list(api.calls)
     assert collect(api, tmp_path)["complete"]
     assert api.calls == before, (
         "terminal same-cutoff history and snapshots must be a no-op"
     )
+    assert ticker.stat().st_mode & 0o777 == 0o660
 
 
 def test_snapshot_client_preserves_documented_unwrapped_shapes_and_blocks_depth(

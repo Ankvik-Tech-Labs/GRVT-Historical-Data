@@ -349,6 +349,7 @@ def _snapshot(api, root, group, day, route, instrument=None):
             or _hash_object(previous["response"]) != previous["response_sha256"]
         ):
             raise ValueError("snapshot identity/hash mismatch")
+        path.chmod(0o660)
         return path, False
     observed = time.time_ns()
     response = api.market_snapshot(route, instrument)
@@ -369,6 +370,7 @@ def _snapshot(api, root, group, day, route, instrument=None):
             "response_sha256": _hash_object(response),
         },
     )
+    path.chmod(0o660)
     return path, True
 
 
