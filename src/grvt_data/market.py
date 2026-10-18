@@ -474,7 +474,18 @@ def collect_market(api, root, day, names, *, end_ns=None, deadline=None):
         schedule = _load(schedule_path, {})
         left = max(0, config.market_page_budget - sum(fetched.values()))
         funding_quota = min(left, max(len(names), config.market_page_budget // 3))
+        family_time_limits = []
         for group, quota in (("funding", funding_quota), ("ohlcv_extra", None)):
+            # Request quotas alone cannot reserve candle time when deep native
+            # funding history takes more calls than fit the entire stage.
+            family_stop = stop
+            if group == "funding":
+                family_stop = min(
+                    stop, time.monotonic() + max(0, stop - time.monotonic()) / 3
+                )
+            api.deadline = (
+                min(family_stop, deadline) if deadline is not None else family_stop
+            )
             quota = (
                 max(0, config.market_page_budget - sum(fetched.values()))
                 if quota is None
@@ -485,10 +496,10 @@ def collect_market(api, root, day, names, *, end_ns=None, deadline=None):
             order = list(range(offset, len(specs))) + list(range(offset))
             failed = set()
             work = 0
-            while order and work < quota and time.monotonic() < stop:
+            while order and work < quota and time.monotonic() < family_stop:
                 advanced = False
                 for index in order:
-                    if work >= quota or time.monotonic() >= stop:
+                    if work >= quota or time.monotonic() >= family_stop:
                         break
                     _disk_guard(root, config)
                     spec = specs[index]
@@ -553,7 +564,7 @@ def collect_market(api, root, day, names, *, end_ns=None, deadline=None):
                         fetched[group] += int(requested)
                         processed[group] += 1
                     except DeadlineExceeded:
-                        if not _stage_ended(stop, deadline):
+                        if not _stage_ended(family_stop, deadline):
                             raise
                         break
                     except CursorRejected as exc:
@@ -576,6 +587,8 @@ def collect_market(api, root, day, names, *, end_ns=None, deadline=None):
                     write_json_atomic(schedule_path, schedule)
                 if not advanced:
                     break
+            if time.monotonic() >= family_stop:
+                family_time_limits.append(group)
     finally:
         api.deadline = original_deadline
     report = {
@@ -592,6 +605,7 @@ def collect_market(api, root, day, names, *, end_ns=None, deadline=None):
         "processed_pages": dict(processed),
         "budgets": {"seconds": budget, "pages": config.market_page_budget},
         "stage_time_limit_reached": time.monotonic() >= stop,
+        "family_time_limits_reached": family_time_limits,
         "coverage_note": "Historical cursor exhaustion is not gap-free history; tickers/reference data are observed snapshots; no depth collection.",
     }
     for group in ("metadata", "ticker"):

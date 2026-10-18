@@ -68,9 +68,12 @@ canonical trade windows are reused while other histories advance.
 Defaults are 2200 additional-data requests and a 1500-second stage, further
 bounded by the supervised per-date deadline with time reserved for publication.
 Daily snapshot requests consume this budget once; durable round-robin offsets
-resume funding and additional candle series across runs. The funding quota is at
-least the instrument count or one third of the request budget, with unused quota
-available to candles. A bounded initial seed can raise the request budget without
+resume funding and additional candle series across runs. The funding request quota is at least the instrument count or one third of the
+request budget. Funding is additionally limited to one third of the time remaining
+after daily snapshots, with its HTTP deadlines bounded to that share; candles
+receive the remaining stage time and all unused funding time/request quota.
+This prevents minute-level legacy native funding histories from starving candles.
+The report names families that reached their intentional time limits. A bounded initial seed can raise the request budget without
 raising the hard worker deadline:
 
 ```bash

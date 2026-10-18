@@ -672,3 +672,33 @@ def test_actual_worker_deadline_is_not_downgraded_to_stage_budget(
     api.market_snapshot = expires
     with pytest.raises(market.DeadlineExceeded):
         market.collect_market(api, tmp_path, DAY, [NAME], deadline=200.0)
+
+
+def test_slow_deep_funding_cannot_starve_candle_stage(tmp_path, monkeypatch):
+    clock = [0.0]
+    monkeypatch.setattr(market.time, "monotonic", lambda: clock[0])
+    api = API(settings(tmp_path))
+    cursors = []
+
+    def deep_funding(instrument, aggregation, start, end, cursor):
+        if clock[0] + 8 > api.deadline:
+            clock[0] = api.deadline
+            raise market.DeadlineExceeded("funding share expired")
+        clock[0] += 8
+        cursors.append(cursor)
+        return {"result": [funding(instrument, end)], "next": f"older-{len(cursors)}"}
+
+    def candle_page(instrument, enum, start, end, cursor, *, price_type):
+        clock[0] += 1
+        return {"result": [candle(instrument, end)], "next": ""}
+
+    api.funding_page = deep_funding
+    api.candle_page = candle_page
+    result = collect(api, tmp_path)
+    assert not result["failures"]
+    assert result["requests"].get("funding", 0) > 0
+    assert result["requests"].get("ohlcv_extra", 0) > 0, (
+        "large funding histories consumed the whole time budget"
+    )
+    assert result["family_time_limits_reached"] == ["funding"]
+    assert api.deadline is None
