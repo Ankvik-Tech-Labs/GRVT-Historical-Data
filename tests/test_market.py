@@ -518,3 +518,119 @@ def test_live_legacy_funding_zero_interval_is_retained_without_inventing_cadence
     assert row["funding_interval_hours"] == 0
     assert row["funding_rate"] == raw["funding_rate"]
     assert json.loads(row["record_json"]) == raw
+
+
+@pytest.mark.parametrize("interval", ["3d", "5d", "1w", "2w", "3w", "4w"])
+def test_long_candle_is_refetched_when_it_closes(tmp_path, monkeypatch, interval):
+    spec = {
+        "dataset": "ohlcv_extra",
+        "instrument": NAME,
+        "price_type": "MARK",
+        "interval": interval,
+    }
+    monkeypatch.setattr(
+        market, "_specs", lambda *args: {"funding": [], "ohlcv_extra": [spec]}
+    )
+    api = API(settings(tmp_path))
+    duration = market.ALL_INTERVALS[interval][1]
+    row = candle(NAME, END) | {
+        "open_time": str(END - duration + market.DAY),
+        "close_time": str(END + market.DAY - 1),
+    }
+    calls = []
+
+    def page(instrument, enum, start, end, cursor, *, price_type):
+        calls.append((start, end))
+        return {
+            "result": [row] if start <= int(row["open_time"]) <= end else [],
+            "next": "",
+        }
+
+    api.candle_page = page
+    assert collect(api, tmp_path)["complete"]
+    assert not list((tmp_path / "ohlcv_extra").rglob("*.parquet"))
+    result = collect(api, tmp_path, DAY + timedelta(days=1))
+    assert result["complete"]
+    path = next((tmp_path / "ohlcv_extra").rglob("*.parquet"))
+    assert pq.read_table(path).column("event_time_ns").to_pylist() == [
+        int(row["open_time"])
+    ]
+    assert calls[-1][0] <= int(row["open_time"])
+
+
+def test_old_exhausted_short_overlap_state_repairs_skipped_long_bar(
+    tmp_path, monkeypatch
+):
+    spec = {
+        "dataset": "ohlcv_extra",
+        "instrument": NAME,
+        "price_type": "MARK",
+        "interval": "1w",
+    }
+    monkeypatch.setattr(
+        market, "_specs", lambda *args: {"funding": [], "ohlcv_extra": [spec]}
+    )
+    current = END + 3 * market.DAY
+    path = tmp_path / "state/market/series/ohlcv_extra/MARK/1w" / (NAME + ".json")
+    write_json_atomic(
+        path,
+        {
+            "spec": spec,
+            "history": market._query(0, END) | {"exhausted": True, "pages": 1},
+            "recent": market._query(END + market.DAY, current)
+            | {"exhausted": True, "pages": 1},
+            "covered_until_ns": current,
+        },
+    )
+    row = candle(NAME, END) | {
+        "open_time": str(END - 6 * market.DAY),
+        "close_time": str(END + market.DAY - 1),
+    }
+    api = API(settings(tmp_path))
+    calls = []
+
+    def page(instrument, enum, start, end, cursor, *, price_type):
+        calls.append((start, end))
+        return {
+            "result": [row] if start <= int(row["open_time"]) <= end else [],
+            "next": "",
+        }
+
+    api.candle_page = page
+    result = collect(api, tmp_path, DAY + timedelta(days=3))
+    assert result["complete"] and calls
+    assert (
+        pq.read_table(next((tmp_path / "ohlcv_extra").rglob("*.parquet"))).num_rows == 1
+    )
+    saved = json.loads(path.read_text())
+    assert saved["history"]["end_ns"] == END and saved["history"]["exhausted"]
+    before = len(calls)
+    assert collect(api, tmp_path, DAY + timedelta(days=3))["complete"]
+    assert len(calls) == before, "repaired terminal state must not redo the migration"
+
+
+def test_old_terminal_manifest_is_requeued_for_overlap_repair(tmp_path):
+    config = settings(tmp_path)
+    snapshot = collect(API(config), tmp_path)
+    archive.seal_revision(
+        config,
+        DAY,
+        report(),
+        ohlcv_report={"files": [], "complete": True, "snapshot_at_ns": 1},
+        market_report=snapshot,
+    )
+    committed(config)
+    assert DAY not in archive.pending_dates(config, DAY + timedelta(days=1))
+    db = archive.publication_db(config)
+    with db:
+        row = db.execute(
+            "SELECT manifest_json FROM revisions WHERE day=?", (str(DAY),)
+        ).fetchone()
+        manifest = json.loads(row[0])
+        manifest["market"]["latest_snapshot"].pop("candle_overlap_policy_version")
+        db.execute(
+            "UPDATE revisions SET manifest_json=? WHERE day=?",
+            (json.dumps(manifest), str(DAY)),
+        )
+    db.close()
+    assert DAY in archive.pending_dates(config, DAY + timedelta(days=1))

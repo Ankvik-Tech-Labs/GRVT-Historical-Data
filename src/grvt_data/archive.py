@@ -152,7 +152,11 @@ def pending_dates(config: Config, today: date) -> set[date]:
             if row and row["manifest_json"]
             else {}
         )
-        if not snapshot.get("latest_snapshot", {}).get("complete"):
+        coverage = snapshot.get("latest_snapshot", {})
+        if (
+            not coverage.get("complete")
+            or coverage.get("candle_overlap_policy_version") != 1
+        ):
             pending.add(yesterday)
     return {d for d in pending if d < today}
 

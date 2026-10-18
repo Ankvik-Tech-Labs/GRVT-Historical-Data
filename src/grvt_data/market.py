@@ -160,6 +160,14 @@ def _query(start, end):
     }
 
 
+def _overlap(spec):
+    return (
+        2 * DAY
+        if spec["dataset"] == "funding"
+        else max(2 * DAY, 2 * ALL_INTERVALS[spec["interval"]][1])
+    )
+
+
 def _state(root, spec, cutoff):
     path = root / "state/market/series" / spec["dataset"] / (_key(spec) + ".json")
     state = _load(path, None)
@@ -169,10 +177,19 @@ def _state(root, spec, cutoff):
             "history": _query(0, cutoff),
             "recent": None,
             "covered_until_ns": 0,
+            "overlap_policy_version": 1,
         }
         write_json_atomic(path, state)
     if state["spec"] != spec:
         raise ValueError("market series identity mismatch")
+    if spec["dataset"] == "ohlcv_extra" and state.get("overlap_policy_version") != 1:
+        # Repair from the initial history boundary, not the last recent cutoff:
+        # intervening short windows may have permanently missed long bars.
+        state["repair_start_ns"] = max(0, state["history"]["end_ns"] - _overlap(spec))
+        state["recent"] = None
+        state["covered_until_ns"] = 0
+        state["overlap_policy_version"] = 1
+        write_json_atomic(path, state)
     return path, state
 
 
@@ -470,21 +487,28 @@ def collect_market(api, root, day, names, *, end_ns=None, deadline=None):
                     if key in failed:
                         continue
                     path, state = _state(root, spec, cutoff)
-                    fresh_start = max(0, cutoff - 2 * DAY)
+                    overlap = _overlap(spec)
+                    fresh_start = max(0, cutoff - overlap)
                     if state["covered_until_ns"] < cutoff:
-                        if state["history"]["end_ns"] == cutoff:
+                        if (
+                            state["history"]["end_ns"] == cutoff
+                            and "repair_start_ns" not in state
+                        ):
                             mode = "history"
                         else:
                             mode = "recent"
                             current = state.get(mode)
                             if current is None or current["end_ns"] != cutoff:
-                                start = max(
-                                    0,
-                                    (
-                                        state["covered_until_ns"]
-                                        or state["history"]["end_ns"]
-                                    )
-                                    - 2 * DAY,
+                                start = state.get(
+                                    "repair_start_ns",
+                                    max(
+                                        0,
+                                        (
+                                            state["covered_until_ns"]
+                                            or state["history"]["end_ns"]
+                                        )
+                                        - overlap,
+                                    ),
                                 )
                                 if current and not current["exhausted"]:
                                     start = min(start, current["start_ns"])
@@ -514,6 +538,8 @@ def collect_market(api, root, day, names, *, end_ns=None, deadline=None):
                             )
                         ):
                             state["covered_until_ns"] = cutoff
+                            if mode == "recent":
+                                state.pop("repair_start_ns", None)
                         write_json_atomic(path, state)
                         fetched[group] += int(requested)
                         processed[group] += 1
@@ -541,6 +567,7 @@ def collect_market(api, root, day, names, *, end_ns=None, deadline=None):
         api.deadline = original_deadline
     report = {
         "schema_version": 1,
+        "candle_overlap_policy_version": 1,
         "snapshot_at_ns": time.time_ns(),
         "snapshot_day": snapshot_day,
         "cutoff_ns": cutoff,
@@ -600,7 +627,11 @@ def collect_market(api, root, day, names, *, end_ns=None, deadline=None):
             path = root / "state/market/series" / group / (_key(spec) + ".json")
             state = _load(path, None)
             if state:
-                fresh = state["covered_until_ns"] >= cutoff
+                fresh = (
+                    state["covered_until_ns"] >= cutoff
+                    and "repair_start_ns" not in state
+                    and (group == "funding" or state.get("overlap_policy_version") == 1)
+                )
                 exhausted = state["history"]["exhausted"]
                 recent += fresh
                 historical += exhausted

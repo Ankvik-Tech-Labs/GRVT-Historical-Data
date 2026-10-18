@@ -31,8 +31,10 @@ also retain complete `record_json` and actual page `observed_at_ns`; unknown sou
 fields survive normalization.
 
 Funding and candles query from start zero with reverse cursors until actual API
-exhaustion. Bounds remain fixed while paginating. Recent queries overlap two days,
-monthly files union by instrument/series/event time, and newer observations win
+exhaustion. Bounds remain fixed while paginating. Recent funding queries overlap two days; candle overlap is the larger of two days
+and twice the native interval duration. Legacy short-overlap states repair from
+the original history boundary, including already-exhausted states.
+Monthly files union by instrument/series/event time, and newer observations win
 corrections. A replay of an old page cannot undo a later correction. Inclusive
 server bounds are locally filtered; unfinished bars are excluded from canonical
 closed candles but their raw responses remain available. Exhaustion certifies only

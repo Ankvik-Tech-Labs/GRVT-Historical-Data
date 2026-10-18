@@ -95,8 +95,8 @@ cd /home/avik/GRVT-Historical-Data
 ```
 
 `daily` downloads pending past dates, yesterday first, then oldest backlog. A
-terminal full day with exhausted candle progress is a no-op. Partial OHLCV on
-current yesterday is re-enqueued; retained completed ticks are reused. It unions current discovery with retained daily
+terminal full day with all selected histories exhausted is a no-op. Partial
+OHLCV or additional public histories on current yesterday are re-enqueued; retained completed ticks are reused. It unions current discovery with retained daily
 metadata, preserving delisted instruments. `publish --date` resumes existing
 sealed work without inventing a revision. Frozen revision dataset scope controls
 recovery, so old mixed work retains its original meaning.
@@ -128,7 +128,7 @@ prunes canonical Parquet or unverified data.
 
 The combined proof and measured storage gate passed. Installed UTC entries:
 
-- **00:30**: combined tick download and recent candles, then bounded history.
+- **00:30**: ticks, candles, funding and observed ticker/reference snapshots, then bounded history.
 - **03:10, 07:10, 11:10, 15:10, 19:10, 23:10**: accelerated history using
   `--ohlcv-recent-pages 1 --ohlcv-backfill-pages 4096 --ohlcv-budget-seconds 1800`.
 - Every five minutes: local combined status; **00:45**: user-owned logrotate.
@@ -136,7 +136,7 @@ The combined proof and measured storage gate passed. Installed UTC entries:
 All publication jobs share the CLI publication lock and the 3600-second per-date
 hard deadline. The first combined worker used 1,411.89 seconds. A live concurrent
 wrapper returned 75 and logged its UTC skip. No collector container is required.
-The six backfill runs advance durable cursors; they do not imply that all exchange
+The six backfill runs advance candle and funding cursors; they do not imply that all exchange
 history is already available. Fully exhausted current-yesterday work becomes a
 no-op. Source envelopes remain retained, so storage and immutable snapshot sizes
 grow with history. The 1000-asset release cap continues to fail closed.
