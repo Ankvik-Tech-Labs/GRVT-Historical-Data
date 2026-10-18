@@ -1,3 +1,42 @@
+# Fair family-time correction — October 18 09:17 UTC
+
+Two original 30-minute stages published successfully but consumed their full
+market time in deep native funding history, leaving additional candle cursors
+unchanged. Read-only page samples confirmed unique strictly older timestamps;
+legacy native records include minute-level observations and zero/unspecified
+funding cadence. No records were fabricated or discarded.
+
+Reviewed fix `3091b3c` caps funding to one third of the time remaining after
+snapshots, bounds its HTTP calls to that family deadline and transfers unused
+time to candles. Page limits and persistent round-robin cursors remain active.
+The hard parent deadline still propagates. **246 tests passed**; independent
+review ran all 28 market cases plus unused-time/page-cap/parent-expiry probes.
+
+The actual 60-second market proof fetched **23 funding and 51 candle pages**,
+then sealed/published/pruned successfully: full invocation **160.70 seconds,
+exit 0**, zero failures. The stage deliberately recorded both family time limits.
+[October 17 release](https://github.com/Ankvik-Tech-Labs/GRVT-Historical-Data/releases/tag/data-2026-10-17) now has revision **6**, manifest SHA
+`f11c532d68377225f392ea51fa3c7ea7770ccad1192b030f04f9c7ba494b6f76`. Authenticated restoration verified **16,051**
+new-family entries and retained source hashes. All **39** earlier asset IDs/digests
+and **736** protected canonical tick hashes remain unchanged; original completed
+trade query provenance is identical. New source/evidence totals 1,177,597,646
+bytes. Funding historical coverage remains partial (690/736 exhausted);
+additional candles remain partial (116/11,224 exhausted).
+
+Only owned verification download/restore scratch was removed after hashing:
+**1,881,484,839 bytes**. Canonical files, raw pages, durable state and compact proof
+JSON were retained. The manually seeded worker stopped gracefully with a durable
+interrupted attempt before deployment. Its controller now preserves the first
+two completed progress records and resumes at cycle3, with at most six more
+30-minute stages using the reviewed fair time allocation. Regular cron stays
+unchanged and owns any remaining work. Historical exhaustion is not a gap-free
+exchange-history claim.
+
+Proofs: `fair-time-live-proof.json`, `release-proof-rev06.json`,
+`verification-scratch-cleanup.json`, and the independent
+`grvt-all-public-data-review/fair-time` artifact. All are scoped under the existing
+all-public rollout evidence or artifact directories.
+
 ## Reviewed continuation and recurring setup — October 18 08:03 UTC
 
 Reviewed product `2027a0641df5403f5b462d13d6cab9a56d466ffa` completed a real

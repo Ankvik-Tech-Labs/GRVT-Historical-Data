@@ -15,13 +15,13 @@ repository access; `draft=false` does not change repository visibility.
 
 ## Current deployment
 
-**October 18:** all-public product `2027a06` is deployed. October 17 revision 3
+**October 18:** all-public product `3091b3c` is deployed. October 17 revision 6
 contains funding, ticker, reference and all four candle price types alongside
-existing ticks/OHLCV. Authenticated restoration verified 6,254 new-family entries,
-all 736 protected tick hashes and all 12 previous asset identities. The corrected
-continuation exited 0; 245 tests and independent integrity review passed. Daily
-and six continuation cron entries now use `--datasets all`. Added histories are
-partially filled and continue from durable cursors; daily observed snapshots are
+existing ticks/OHLCV. Authenticated restoration verified 16,051 new-family entries,
+all 736 protected tick hashes and all 39 previous asset identities. The corrected
+continuation exited 0; 246 tests and independent integrity review passed. Daily
+and six continuation cron entries now use `--datasets all`. Funding/candles have reserved time shares so deep legacy funding cannot starve
+candle collection. Added histories are partially filled and continue from durable cursors; daily observed snapshots are
 complete for the current 184-market universe. Depth remains stopped.
 
 
