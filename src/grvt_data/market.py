@@ -18,7 +18,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from .api import CursorRejected
-from .config import remaining_seconds
+from .config import DeadlineExceeded, remaining_seconds
 from .ohlcv import DAY, INTERVALS, NS
 from .storage import write_json_atomic, write_parquet_atomic
 from .trades import window_bounds
@@ -391,6 +391,11 @@ def _snapshot(api, root, group, day, route, instrument=None):
     return path, True
 
 
+def _stage_ended(stop, deadline):
+    now = time.monotonic()
+    return now >= stop and (deadline is None or now < deadline)
+
+
 def market_status(root):
     report = _load(
         root / "state/market/status.json", {"enabled": True, "status": "not started"}
@@ -442,6 +447,10 @@ def collect_market(api, root, day, names, *, end_ns=None, deadline=None):
                 )
                 snapshots[group].append(path)
                 fetched[group] += int(requested)
+            except DeadlineExceeded:
+                if not _stage_ended(stop, deadline):
+                    raise
+                break
             except Exception as exc:  # noqa: BLE001 -- preserve independent partial data
                 failures[f"{route}/{instrument or 'all'}"] = (
                     f"{type(exc).__name__}: {exc}"
@@ -543,6 +552,10 @@ def collect_market(api, root, day, names, *, end_ns=None, deadline=None):
                         write_json_atomic(path, state)
                         fetched[group] += int(requested)
                         processed[group] += 1
+                    except DeadlineExceeded:
+                        if not _stage_ended(stop, deadline):
+                            raise
+                        break
                     except CursorRejected as exc:
                         saved = _load(path, state)
                         q = saved[mode]
@@ -578,6 +591,7 @@ def collect_market(api, root, day, names, *, end_ns=None, deadline=None):
         "requests": dict(fetched),
         "processed_pages": dict(processed),
         "budgets": {"seconds": budget, "pages": config.market_page_budget},
+        "stage_time_limit_reached": time.monotonic() >= stop,
         "coverage_note": "Historical cursor exhaustion is not gap-free history; tickers/reference data are observed snapshots; no depth collection.",
     }
     for group in ("metadata", "ticker"):

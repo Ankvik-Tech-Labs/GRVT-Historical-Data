@@ -634,3 +634,41 @@ def test_old_terminal_manifest_is_requeued_for_overlap_repair(tmp_path):
         )
     db.close()
     assert DAY in archive.pending_dates(config, DAY + timedelta(days=1))
+
+
+@pytest.mark.parametrize("phase", ["snapshot", "history"])
+def test_stage_deadline_publishes_partial_without_false_api_failure(
+    tmp_path, monkeypatch, phase
+):
+    clock = [0.0]
+    monkeypatch.setattr(market.time, "monotonic", lambda: clock[0])
+    api = API(settings(tmp_path))
+
+    def expires(*args):
+        clock[0] = 101.0
+        raise market.DeadlineExceeded("configured stage budget ended")
+
+    if phase == "snapshot":
+        api.market_snapshot = expires
+    else:
+        api.funding_page = expires
+    result = collect(api, tmp_path)
+    assert not result["complete"]
+    assert result["failures"] == {}
+    assert result["stage_time_limit_reached"]
+
+
+def test_actual_worker_deadline_is_not_downgraded_to_stage_budget(
+    tmp_path, monkeypatch
+):
+    clock = [0.0]
+    monkeypatch.setattr(market.time, "monotonic", lambda: clock[0])
+    api = API(settings(tmp_path))
+
+    def expires(*args):
+        clock[0] = 201.0
+        raise market.DeadlineExceeded("parent worker deadline ended")
+
+    api.market_snapshot = expires
+    with pytest.raises(market.DeadlineExceeded):
+        market.collect_market(api, tmp_path, DAY, [NAME], deadline=200.0)

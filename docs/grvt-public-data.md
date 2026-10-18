@@ -80,7 +80,9 @@ scripts/run-daily.sh --datasets all --ohlcv-recent-pages 1 \
 .venv/bin/grvt-data status --data-dir /srv/grvt --datasets all
 ```
 
-Partial successful work is archived with explicit coverage and retried; it never
+An expected stage-time limit records partial coverage rather than a false API
+failure; the actual parent worker deadline remains a fatal deadline. Partial
+successful work is archived with explicit coverage and retried; it never
 certifies the remaining series complete. Independent failures do not discard
 other datasets. Requests, hashing and worker lifetime obey the existing deadline.
 New work pauses at the hard free-space threshold. Before freezing snapshots the
