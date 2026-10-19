@@ -9,7 +9,7 @@ services:
     init: true
     stop_grace_period: 60s
     volumes:
-      - ${GRVT_DATA_DIR:-/path/to/grvt-data}:/data
+      - ${GRVT_DATA_DIR:-./data}:/data
     healthcheck:
       test: ["CMD", "python", "-c", "import json,time; p=json.load(open('/data/state/depth-status.json')); assert 0 <= time.time_ns()-p['received_ns'] < 60000000000"]
       interval: 30s

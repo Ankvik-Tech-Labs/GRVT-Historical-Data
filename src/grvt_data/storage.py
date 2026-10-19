@@ -79,7 +79,7 @@ def write_parquet_atomic(path: Path, rows: list[dict], schema: pa.Schema) -> Non
             write_statistics=True,
             row_group_size=65536,
         )
-        # /path/to/grvt-data's setgid directories supply the consumer group. Atomic
+        # the configured data root's directory permissions supply the consumer group. Atomic
         # mkstemp defaults to 0600, so grant group access before replacement.
         temp.chmod(0o660)
 

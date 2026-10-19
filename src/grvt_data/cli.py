@@ -35,7 +35,7 @@ from .storage import (
 )
 from .trades import day_universe, download_trades, window_bounds
 
-DEFAULT_ROOT = Path("/path/to/grvt-data")
+DEFAULT_ROOT = Path(os.environ.get("GRVT_DATA_DIR", "data"))
 
 
 def utc_today():

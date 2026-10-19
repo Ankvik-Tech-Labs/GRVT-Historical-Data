@@ -4,7 +4,7 @@
 Private account, payment and trading APIs are outside this market archive. Existing
 published assets and old mixed revisions keep their frozen meaning.
 
-| Family | Coverage and source | Canonical location below `/path/to/grvt-data` |
+| Family | Coverage and source | Canonical location below `<data-dir>` |
 |---|---|---|
 | Executions | Full UTC-day `trade_history`, all discovered instruments | `trades/DAY/INSTRUMENT/START-END/trades.parquet` |
 | Trade candles | Existing 11 native intervals and derived UTC calendar month | `ohlcv/INTERVAL/INSTRUMENT/YYYY-MM.parquet` |
@@ -80,7 +80,7 @@ raising the hard worker deadline:
 scripts/run-daily.sh --datasets all --ohlcv-recent-pages 1 \
   --ohlcv-backfill-pages 4096 --market-page-budget 10000 \
   --market-budget-seconds 1800
-.venv/bin/grvt-data status --data-dir /path/to/grvt-data --datasets all
+.venv/bin/grvt-data status --data-dir <data-dir> --datasets all
 ```
 
 An expected stage-time limit records partial coverage rather than a false API

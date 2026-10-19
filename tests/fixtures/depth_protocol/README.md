@@ -5,7 +5,7 @@ of production `wss://market-data.grvt.io/ws/full`, stream `v1.book.d`,
 selectors `BTC_USDT_Perp@100` (liquid) and `AAOI_USDT_Perp@100` (quiet
 equity). It was captured 2026-10-16 with
 `scripts/research/capture_depth_protocol.py` run against the `websockets`
-package already present in `/path/to/capture-environment/.venv`
+package already present in `the capture environment`
 — no product dependency was installed in any global environment to produce
 this evidence. Gzip is for size only (4.25 MB raw → 328 KB); every number
 below is computed directly from this file, split by session at the recorded

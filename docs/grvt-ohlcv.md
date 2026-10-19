@@ -10,7 +10,7 @@ create_time is metadata only: live evidence shows older candles. Never fill gaps
 or discard native zero-volume bars. Twelve Apex-compatible intervals are exposed:
 1m,5m,15m,30m,1h,2h,4h,6h,12h,1d,1w and derived calendar1mo.
 
-Canonical files: `/path/to/grvt-data/ohlcv/<interval>/<instrument>/YYYY-MM.parquet`.
+Canonical files: `<data-dir>/ohlcv/<interval>/<instrument>/YYYY-MM.parquet`.
 Keys are instrument,type,interval,open_time; ns use int64 and numeric values retain
 strings. Read/merge one bounded month at a time. New observations replace matching
 keys atomically, comparing the original page query-start timestamp so replay of
@@ -44,7 +44,7 @@ snapshot sealing/publication. Each API request inherits its stage deadline.
 that is 1012 seconds before extra minute pages/retries. Budgets are limits, not
 promises of daily completion. Read snapshot progress before claiming freshness.
 
-`grvt-data daily --datasets trades,ohlcv --data-dir /path/to/grvt-data` resumes progress.
+`grvt-data daily --datasets trades,ohlcv --data-dir <data-dir>` resumes progress.
 Only current yesterday is re-enqueued for partial OHLCV; old snapshots remain
 immutable historical observations. Completed ticks are reused from their frozen
 report/canonical files, even after transient trade pages were verified and pruned.

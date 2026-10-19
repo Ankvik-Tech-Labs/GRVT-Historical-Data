@@ -278,7 +278,7 @@ def test_cli_defaults_and_worker_payload_preserve_tick_scope(tmp_path, monkeypat
     seen = []
     monkeypatch.setattr(cli, "daily", lambda config, **kw: seen.append(config) or 0)
     assert cli.main(["daily", "--datasets", "trades"]) == 0
-    assert seen[0].data_dir == Path("/path/to/grvt-data")
+    assert seen[0].data_dir == Path.cwd() / "data"
     assert seen[0].datasets == ("trades",)
     output = tmp_path / "payload.json"
     command = [

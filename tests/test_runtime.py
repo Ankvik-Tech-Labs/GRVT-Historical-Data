@@ -88,7 +88,14 @@ with cli.publication_lock(config,0) as fd:
         assert fd is not None
 
 
-def installer(tmp_path, *, hostname="deployment-host", zone="UTC", old=""):
+def installer(
+    tmp_path,
+    *,
+    hostname="example-host",
+    expected_hostname="example-host",
+    zone="UTC",
+    old="",
+):
     fake = tmp_path / "bin"
     fake.mkdir()
     executable(fake / "hostname", f"#!/bin/bash\necho {hostname}\n")
@@ -109,20 +116,21 @@ if [[ $1 == -l ]]; then cat {str(crontab)!r}; else cp "$1" {str(crontab)!r}; fi
     data = tmp_path / "data"
     executable(deploy / ".venv/bin/grvt-data", "#!/bin/bash\nexit 0\n")
     executable(deploy / "scripts/run-daily.sh", "#!/bin/bash\nexit 0\n")
-    (deploy / "scripts/grvt-data.logrotate").write_text(
-        (ROOT / "scripts/grvt-data.logrotate").read_text()
-    )
     # Substitute only the fixed deployment roots. Host checks, cron merge and
     # backup logic are the exact production script, with mock live host tools.
     source = (
-        (ROOT / "scripts/install-deployment-host.sh")
+        (ROOT / "scripts/install.sh")
         .read_text()
-        .replace("/path/to/grvt-checkout", str(deploy))
-        .replace("/path/to/grvt-data", str(data))
         .replace("/usr/sbin/logrotate", str(fake / "logrotate"))
     )
     script = executable(tmp_path / "install.sh", source)
-    env = dict(os.environ, PATH=str(fake) + ":" + os.environ["PATH"])
+    env = dict(
+        os.environ,
+        PATH=str(fake) + ":" + os.environ["PATH"],
+        GRVT_DEPLOY_ROOT=str(deploy),
+        GRVT_DATA_DIR=str(data),
+        GRVT_EXPECTED_HOSTNAME=expected_hostname,
+    )
     return script, env, crontab, data
 
 
@@ -174,17 +182,23 @@ def test_installer_user_logrotate_is_scoped_and_idempotent(tmp_path):
     )
     config = data / "state/grvt-data.logrotate"
     assert config.stat().st_mode & 0o777 == 0o600
-    assert config.read_text() == (ROOT / "scripts/grvt-data.logrotate").read_text()
+    assert str(data / "logs/daily.log") in config.read_text()
+    assert str(data / "logs/status.log") in config.read_text()
+    assert "su " in config.read_text()
     assert "weekly" in config.read_text() and "rotate 8" in config.read_text()
     assert "compress" in config.read_text()
 
 
 @pytest.mark.parametrize(
-    ("host", "zone"), [("wrong-host", "UTC"), ("deployment-host", "Europe/London")]
+    ("host", "expected", "zone"),
+    [
+        ("different-host", "example-host", "UTC"),
+        ("example-host", "example-host", "Europe/London"),
+    ],
 )
-def test_installer_refuses_live_wrong_host_or_timezone(tmp_path, host, zone):
+def test_installer_refuses_live_wrong_host_or_timezone(tmp_path, host, expected, zone):
     script, env, crontab, data = installer(
-        tmp_path, hostname=host, zone=zone, old="keep me\n"
+        tmp_path, hostname=host, expected_hostname=expected, zone=zone, old="keep me\n"
     )
     result = subprocess.run(
         ["bash", str(script)], env=env, capture_output=True, text=True, check=False
@@ -227,7 +241,7 @@ def test_compose_only_mounts_data_and_no_github_credentials():
     config = json.loads(result.stdout)["services"]["depth"]
     assert [v["target"] for v in config["volumes"]] == ["/data"]
     assert config["profiles"] == ["depth"]
-    assert config["volumes"][0]["source"] == "/path/to/grvt-data"
+    assert config["volumes"][0]["source"] == str(ROOT / "docker/data")
     assert config["restart"] == "unless-stopped"
     assert config["user"] == "1000:1000"
     assert not config.get("environment")

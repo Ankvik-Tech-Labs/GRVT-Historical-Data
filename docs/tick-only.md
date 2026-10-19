@@ -1,7 +1,7 @@
 # Tick-only collection
 
 For explicit tick-only operation, select `--datasets trades` and
-`--data-dir /path/to/grvt-data`. The daily/publication/status CLI, wrapper and newly generated
+`--data-dir <data-dir>`. The daily/publication/status CLI, wrapper and newly generated
 cron entries now select `trades,ohlcv`; see [OHLCV collection](grvt-ohlcv.md).
 An already installed cron stays unchanged until the deployment owner reruns the
 installer. The library retains its historical combined default:
@@ -17,7 +17,7 @@ existing contracts.
 Canonical Parquet stays at:
 
 ```text
-/path/to/grvt-data/trades/YYYY-MM-DD/INSTRUMENT/START_NS-END_NS/trades.parquet
+<data-dir>/trades/YYYY-MM-DD/INSTRUMENT/START_NS-END_NS/trades.parquet
 ```
 
 A window has one canonical file per instrument; atomic replacement writes the
