@@ -1,3 +1,17 @@
+# GRVT repository ownership and deployment — October 19, 2026
+
+The private `GRVT-Historical-Data` repository was transferred from the
+`Ankvik-Tech-Labs` organization to the `Aviksaikat` personal account on October
+19, 2026. The release assets and draft PR transferred with it. The collector's
+default publication target is `Aviksaikat/GRVT-Historical-Data`; the daily
+schedule remains active on vitalik8. The prior org URL redirects to the new
+owner, but all local clones should use the new remote.
+
+## Prior deployment evidence
+
+The details below record earlier rollout stages and may be superseded by later
+release revisions.
+
 # Fair family-time correction — October 18 09:17 UTC
 
 Two original 30-minute stages published successfully but consumed their full
@@ -15,7 +29,7 @@ review ran all 28 market cases plus unused-time/page-cap/parent-expiry probes.
 The actual 60-second market proof fetched **23 funding and 51 candle pages**,
 then sealed/published/pruned successfully: full invocation **160.70 seconds,
 exit 0**, zero failures. The stage deliberately recorded both family time limits.
-[October 17 release](https://github.com/Ankvik-Tech-Labs/GRVT-Historical-Data/releases/tag/data-2026-10-17) now has revision **6**, manifest SHA
+[October 17 release](https://github.com/Aviksaikat/GRVT-Historical-Data/releases/tag/data-2026-10-17) now has revision **6**, manifest SHA
 `f11c532d68377225f392ea51fa3c7ea7770ccad1192b030f04f9c7ba494b6f76`. Authenticated restoration verified **16,051**
 new-family entries and retained source hashes. All **39** earlier asset IDs/digests
 and **736** protected canonical tick hashes remain unchanged; original completed
@@ -44,7 +58,7 @@ continuation in **251.95 seconds, exit 0**, with zero failures. Its 256 history
 requests reused all ticker/reference observations and the original completed
 trade report exactly. No completed tick window was downloaded again.
 
-Current [October 17 release](https://github.com/Ankvik-Tech-Labs/GRVT-Historical-Data/releases/tag/data-2026-10-17) is revision 3 with active manifest
+Current [October 17 release](https://github.com/Aviksaikat/GRVT-Historical-Data/releases/tag/data-2026-10-17) is revision 3 with active manifest
 SHA `c382bb021a250124f8550a2129f79e181eab690059b7489b1b061780352b3956` and **20 immutable assets**. Authenticated restore
 verified **6,254** new-family entries and matched all
 retained source hashes. All 12 previously public assets and **736** protected
@@ -155,7 +169,7 @@ Free space after authenticated restore is751.197GB. Detailed proofs:
 Reviewed product `0d8c1cf7b0c9a9213a964ba7c1077108503c53d1` is deployed from
 `/home/avik/GRVT-Historical-Data` with its isolated Python3.13 environment.
 Implementation218 tests passed; independent review approved; deployment reran25
-OHLCV cases successfully. Source is on draft [PR1](https://github.com/Ankvik-Tech-Labs/GRVT-Historical-Data/pull/1).
+OHLCV cases successfully. Source is on draft [PR1](https://github.com/Aviksaikat/GRVT-Historical-Data/pull/1).
 Main remains unmerged. This records a configured, verified pipeline; the initial snapshot below preceded the completed accelerator supplement above.
 
 ## Canonical data and integrity
@@ -187,7 +201,7 @@ API exhaustion will describe pagination, not guaranteed gap-free exchange histor
 
 ## Measured publication
 
-[October15 release](https://github.com/Ankvik-Tech-Labs/GRVT-Historical-Data/releases/tag/data-2026-10-15)
+[October15 release](https://github.com/Aviksaikat/GRVT-Historical-Data/releases/tag/data-2026-10-15)
 ID415299363 now has combined revision2. The repository stays private; authorized
 GitHub access is required. Published means non-draft, not anonymous access.
 
@@ -206,7 +220,7 @@ seal5.600600s,publish/verify10.654481s,cleanup1.923279s. Hard per-date3600s leav
 frozen report paths referenced already-pruned original home files; restored
 canonical files were protected. The resulting report uses retained `/srv` paths.
 
-[October16 revision2](https://github.com/Ankvik-Tech-Labs/GRVT-Historical-Data/releases/tag/data-2026-10-16)
+[October16 revision2](https://github.com/Aviksaikat/GRVT-Historical-Data/releases/tag/data-2026-10-16)
 remains the earlier tick-only provisional proof. A completed October16 UTC-day
 supersession is a future run; no such completion is claimed here.
 
