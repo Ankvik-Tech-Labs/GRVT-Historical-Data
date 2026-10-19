@@ -1,0 +1,10 @@
+/path/to/grvt-data/logs/daily.log /path/to/grvt-data/logs/status.log {
+    weekly
+    rotate 8
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+    su operator operator
+}

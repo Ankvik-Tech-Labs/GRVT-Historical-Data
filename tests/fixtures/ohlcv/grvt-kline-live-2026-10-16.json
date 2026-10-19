@@ -1,0 +1,90 @@
+{
+  "captured_at_ns": 1792182905583102799,
+  "endpoint": "https://market-data.grvt.io/full/v1/kline",
+  "request": {
+    "instrument": "BTC_USDT_Perp",
+    "interval": "CI_1_M",
+    "type": "TRADE",
+    "start_time": "1792022400000000000",
+    "end_time": "1792022700000000000",
+    "limit": 1000,
+    "cursor": ""
+  },
+  "response": {
+    "result": [
+      {
+        "open_time": "1792022700000000000",
+        "close_time": "1792022760000000000",
+        "open": "81730.0",
+        "close": "81783.2",
+        "high": "81783.2",
+        "low": "81730.0",
+        "volume_b": "0.002",
+        "volume_q": "163.5664",
+        "trades": 1,
+        "instrument": "BTC_USDT_Perp"
+      },
+      {
+        "open_time": "1792022640000000000",
+        "close_time": "1792022700000000000",
+        "open": "81685.0",
+        "close": "81730.0",
+        "high": "81730.0",
+        "low": "81685.0",
+        "volume_b": "0.002",
+        "volume_q": "163.46",
+        "trades": 1,
+        "instrument": "BTC_USDT_Perp"
+      },
+      {
+        "open_time": "1792022580000000000",
+        "close_time": "1792022640000000000",
+        "open": "81684.6",
+        "close": "81685.0",
+        "high": "81685.0",
+        "low": "81684.6",
+        "volume_b": "0.594",
+        "volume_q": "48520.89",
+        "trades": 15,
+        "instrument": "BTC_USDT_Perp"
+      },
+      {
+        "open_time": "1792022520000000000",
+        "close_time": "1792022580000000000",
+        "open": "81684.6",
+        "close": "81684.6",
+        "high": "81684.6",
+        "low": "81684.6",
+        "volume_b": "0.0",
+        "volume_q": "0.0",
+        "trades": 0,
+        "instrument": "BTC_USDT_Perp"
+      },
+      {
+        "open_time": "1792022460000000000",
+        "close_time": "1792022520000000000",
+        "open": "81680.7",
+        "close": "81684.6",
+        "high": "81684.6",
+        "low": "81680.7",
+        "volume_b": "0.055",
+        "volume_q": "4492.653",
+        "trades": 3,
+        "instrument": "BTC_USDT_Perp"
+      },
+      {
+        "open_time": "1792022400000000000",
+        "close_time": "1792022460000000000",
+        "open": "81647.5",
+        "close": "81680.7",
+        "high": "81680.7",
+        "low": "81647.5",
+        "volume_b": "0.025",
+        "volume_q": "2042.0175",
+        "trades": 2,
+        "instrument": "BTC_USDT_Perp"
+      }
+    ],
+    "next": ""
+  }
+}

@@ -1,0 +1,368 @@
+{
+  "observed_date_utc": "2026-10-18",
+  "source": "https://market-data.grvt.io/full/v1/",
+  "scope": "Read-only production samples; not a full history fixture",
+  "samples": [
+    {
+      "route": "mini",
+      "request": {
+        "instrument": "BTC_USDT_Perp"
+      },
+      "observed_ns": 1792308274670643029,
+      "response": {
+        "result": {
+          "event_time": "1792308274167190343",
+          "instrument": "BTC_USDT_Perp",
+          "mark_price": "81683.832954163",
+          "index_price": "81712.451521739",
+          "last_price": "81693.2",
+          "last_size": "3.275",
+          "mid_price": "81684.05",
+          "best_bid_price": "81684.0",
+          "best_bid_size": "3.912",
+          "best_ask_price": "81684.1",
+          "best_ask_size": "3.715"
+        }
+      }
+    },
+    {
+      "route": "ticker",
+      "request": {
+        "instrument": "BTC_USDT_Perp"
+      },
+      "observed_ns": 1792308275165222732,
+      "response": {
+        "result": {
+          "event_time": "1792308275000000000",
+          "instrument": "BTC_USDT_Perp",
+          "mark_price": "81683.832954163",
+          "index_price": "81712.451521739",
+          "last_price": "81693.2",
+          "last_size": "3.275",
+          "mid_price": "81684.05",
+          "best_bid_price": "81684.0",
+          "best_bid_size": "3.912",
+          "best_ask_price": "81684.1",
+          "best_ask_size": "3.715",
+          "funding_rate_8h_curr": "0.0069",
+          "funding_rate_8h_avg": "0.0069",
+          "interest_rate": "0.0",
+          "forward_price": "0.0",
+          "buy_volume_24h_b": "959.908",
+          "sell_volume_24h_b": "956.408",
+          "buy_volume_24h_q": "78200379.9563",
+          "sell_volume_24h_q": "77918068.6296",
+          "high_price": "82034.2",
+          "low_price": "80796.1",
+          "open_price": "81611.3",
+          "open_interest": "2504.79632092",
+          "long_short_ratio": "2.560509",
+          "funding_rate": "0.0069",
+          "next_funding_time": "1792310400000000000",
+          "status": "ACTIVE",
+          "session": "REGULAR"
+        }
+      }
+    },
+    {
+      "route": "funding",
+      "request": {
+        "instrument": "BTC_USDT_Perp",
+        "start_time": "0",
+        "end_time": "1792281600000000000",
+        "limit": 2,
+        "agg_type": "FUNDING_INTERVAL"
+      },
+      "observed_ns": 1792308275665053521,
+      "response": {
+        "result": [
+          {
+            "instrument": "BTC_USDT_Perp",
+            "funding_rate": "0.01",
+            "funding_time": "1792281600000000000",
+            "mark_price": "81457.600008156",
+            "funding_rate_8_h_avg": "0.01",
+            "funding_interval_hours": 8
+          },
+          {
+            "instrument": "BTC_USDT_Perp",
+            "funding_rate": "0.0062",
+            "funding_time": "1792252800000000000",
+            "mark_price": "81326.605714518",
+            "funding_rate_8_h_avg": "0.0062",
+            "funding_interval_hours": 8
+          }
+        ],
+        "next": "eyJmdW5kaW5nVGltZSI6MTc5MjI1MjgwMDAwMDAwMDAwMH0"
+      }
+    },
+    {
+      "route": "funding",
+      "request": {
+        "instrument": "BTC_USDT_Perp",
+        "start_time": "0",
+        "end_time": "1792281600000000000",
+        "limit": 2,
+        "agg_type": "ONE_HOURLY"
+      },
+      "observed_ns": 1792308276189221258,
+      "response": {
+        "result": [
+          {
+            "instrument": "BTC_USDT_Perp",
+            "funding_rate": "0.0012",
+            "funding_time": "1792281600000000000",
+            "mark_price": "81457.600008156",
+            "funding_rate_8_h_avg": "0.0012",
+            "funding_interval_hours": 1
+          },
+          {
+            "instrument": "BTC_USDT_Perp",
+            "funding_rate": "0.0012",
+            "funding_time": "1792278000000000000",
+            "mark_price": "81457.600008156",
+            "funding_rate_8_h_avg": "0.0012",
+            "funding_interval_hours": 1
+          }
+        ],
+        "next": "eyJmdW5kaW5nVGltZSI6MTc5MjI3ODAwMDAwMDAwMDAwMH0"
+      }
+    },
+    {
+      "route": "funding",
+      "request": {
+        "instrument": "BTC_USDT_Perp",
+        "start_time": "0",
+        "end_time": "1792281600000000000",
+        "limit": 2,
+        "agg_type": "FOUR_HOURLY"
+      },
+      "observed_ns": 1792308277168873437,
+      "response": {
+        "result": [
+          {
+            "instrument": "BTC_USDT_Perp",
+            "funding_rate": "0.005",
+            "funding_time": "1792281600000000000",
+            "mark_price": "81457.600008156",
+            "funding_rate_8_h_avg": "0.005",
+            "funding_interval_hours": 4
+          },
+          {
+            "instrument": "BTC_USDT_Perp",
+            "funding_rate": "0.005",
+            "funding_time": "1792267200000000000",
+            "mark_price": "81457.600008156",
+            "funding_rate_8_h_avg": "0.005",
+            "funding_interval_hours": 4
+          }
+        ],
+        "next": "eyJmdW5kaW5nVGltZSI6MTc5MjI2NzIwMDAwMDAwMDAwMH0"
+      }
+    },
+    {
+      "route": "funding",
+      "request": {
+        "instrument": "BTC_USDT_Perp",
+        "start_time": "0",
+        "end_time": "1792281600000000000",
+        "limit": 2,
+        "agg_type": "EIGHT_HOURLY"
+      },
+      "observed_ns": 1792308277447849589,
+      "response": {
+        "result": [
+          {
+            "instrument": "BTC_USDT_Perp",
+            "funding_rate": "0.01",
+            "funding_time": "1792281600000000000",
+            "mark_price": "81457.600008156",
+            "funding_rate_8_h_avg": "0.01",
+            "funding_interval_hours": 8
+          },
+          {
+            "instrument": "BTC_USDT_Perp",
+            "funding_rate": "0.0062",
+            "funding_time": "1792252800000000000",
+            "mark_price": "81326.605714518",
+            "funding_rate_8_h_avg": "0.0062",
+            "funding_interval_hours": 8
+          }
+        ],
+        "next": "eyJmdW5kaW5nVGltZSI6MTc5MjI1MjgwMDAwMDAwMDAwMH0"
+      }
+    },
+    {
+      "route": "kline",
+      "request": {
+        "instrument": "BTC_USDT_Perp",
+        "start_time": "1792195200000000000",
+        "end_time": "1792281600000000000",
+        "limit": 2,
+        "interval": "CI_3_M",
+        "type": "TRADE"
+      },
+      "observed_ns": 1792308277950069378,
+      "response": {
+        "result": [
+          {
+            "open_time": "1792281600000000000",
+            "close_time": "1792281780000000000",
+            "open": "81457.6",
+            "close": "81378.0",
+            "high": "81457.6",
+            "low": "81378.0",
+            "volume_b": "5.55",
+            "volume_q": "451710.1408",
+            "trades": 4,
+            "instrument": "BTC_USDT_Perp"
+          },
+          {
+            "open_time": "1792281420000000000",
+            "close_time": "1792281600000000000",
+            "open": "81452.2",
+            "close": "81457.6",
+            "high": "81457.7",
+            "low": "81452.2",
+            "volume_b": "0.045",
+            "volume_q": "3665.5962",
+            "trades": 2,
+            "instrument": "BTC_USDT_Perp"
+          }
+        ],
+        "next": "eyJvcGVuVGltZSI6MTc5MjI4MTQyMDAwMDAwMDAwMH0"
+      }
+    },
+    {
+      "route": "kline",
+      "request": {
+        "instrument": "BTC_USDT_Perp",
+        "start_time": "1792195200000000000",
+        "end_time": "1792281600000000000",
+        "limit": 2,
+        "interval": "CI_3_M",
+        "type": "MARK"
+      },
+      "observed_ns": 1792308278453697296,
+      "response": {
+        "result": [
+          {
+            "open_time": "1792281600000000000",
+            "close_time": "1792281780000000000",
+            "open": "81457.600008156",
+            "close": "81363.995548698",
+            "high": "81458.414604487",
+            "low": "81363.995548698",
+            "volume_b": "5.55",
+            "volume_q": "451710.1408",
+            "trades": 4,
+            "instrument": "BTC_USDT_Perp"
+          },
+          {
+            "open_time": "1792281420000000000",
+            "close_time": "1792281600000000000",
+            "open": "81452.20001631",
+            "close": "81457.600008156",
+            "high": "81463.064052078",
+            "low": "81452.20001631",
+            "volume_b": "0.045",
+            "volume_q": "3665.5962",
+            "trades": 2,
+            "instrument": "BTC_USDT_Perp"
+          }
+        ],
+        "next": "eyJvcGVuVGltZSI6MTc5MjI4MTQyMDAwMDAwMDAwMH0"
+      }
+    },
+    {
+      "route": "kline",
+      "request": {
+        "instrument": "BTC_USDT_Perp",
+        "start_time": "1792195200000000000",
+        "end_time": "1792281600000000000",
+        "limit": 2,
+        "interval": "CI_3_M",
+        "type": "INDEX"
+      },
+      "observed_ns": 1792308278955192195,
+      "response": {
+        "result": [
+          {
+            "open_time": "1792281600000000000",
+            "close_time": "1792281780000000000",
+            "open": "81489.126747288",
+            "close": "81403.39413858",
+            "high": "81489.325266345",
+            "low": "81403.39413858",
+            "volume_b": "5.55",
+            "volume_q": "451710.1408",
+            "trades": 4,
+            "instrument": "BTC_USDT_Perp"
+          },
+          {
+            "open_time": "1792281420000000000",
+            "close_time": "1792281600000000000",
+            "open": "81481.968059796",
+            "close": "81489.126747288",
+            "high": "81493.313929358",
+            "low": "81481.968059796",
+            "volume_b": "0.045",
+            "volume_q": "3665.5962",
+            "trades": 2,
+            "instrument": "BTC_USDT_Perp"
+          }
+        ],
+        "next": "eyJvcGVuVGltZSI6MTc5MjI4MTQyMDAwMDAwMDAwMH0"
+      }
+    },
+    {
+      "route": "kline",
+      "request": {
+        "instrument": "BTC_USDT_Perp",
+        "start_time": "1792195200000000000",
+        "end_time": "1792281600000000000",
+        "limit": 2,
+        "interval": "CI_3_M",
+        "type": "MID"
+      },
+      "observed_ns": 1792308279460592374,
+      "response": {
+        "result": [
+          {
+            "open_time": "1792281600000000000",
+            "close_time": "1792281780000000000",
+            "open": "81457.65",
+            "close": "81362.55",
+            "high": "81457.65",
+            "low": "81362.55",
+            "volume_b": "5.55",
+            "volume_q": "451710.1408",
+            "trades": 4,
+            "instrument": "BTC_USDT_Perp"
+          },
+          {
+            "open_time": "1792281420000000000",
+            "close_time": "1792281600000000000",
+            "open": "81452.15",
+            "close": "81457.65",
+            "high": "81462.25",
+            "low": "81452.15",
+            "volume_b": "0.045",
+            "volume_q": "3665.5962",
+            "trades": 2,
+            "instrument": "BTC_USDT_Perp"
+          }
+        ],
+        "next": "eyJvcGVuVGltZSI6MTc5MjI4MTQyMDAwMDAwMDAwMH0"
+      }
+    }
+  ],
+  "legacy_funding_zero_interval": {
+    "instrument": "BTC_USDT_Perp",
+    "funding_rate": "-0.0096",
+    "funding_time": "1760515200000000000",
+    "mark_price": "112517.332450568",
+    "funding_rate_8_h_avg": "0.0024",
+    "funding_interval_hours": 0
+  }
+}

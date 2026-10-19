@@ -1,0 +1,583 @@
+"""Durable replace-on-success state and typed Parquet writes."""
+
+import json
+import os
+import shutil
+import struct
+import tempfile
+import time
+import uuid
+import zlib
+from collections.abc import Callable, Iterator
+from dataclasses import asdict, dataclass
+from datetime import UTC, date, datetime
+from pathlib import Path
+
+import pyarrow as pa
+import pyarrow.parquet as pq
+
+from .config import Config
+
+TRADE_SCHEMA = pa.schema(
+    [
+        pa.field("instrument", pa.string(), nullable=False),
+        pa.field("trade_id", pa.string(), nullable=False),
+        pa.field("event_time", pa.int64(), nullable=False),
+        *[
+            pa.field(name, pa.string(), nullable=False)
+            for name in ("price", "size", "venue")
+        ],
+        pa.field("is_taker_buyer", pa.bool_(), nullable=False),
+        *[
+            pa.field(name, pa.string())
+            for name in ("mark_price", "index_price", "interest_rate", "forward_price")
+        ],
+        pa.field("is_rpi", pa.bool_()),
+    ]
+)
+
+
+def _atomic(path: Path, writer: Callable[[Path], None]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, name = tempfile.mkstemp(prefix=".", suffix=".tmp", dir=path.parent)
+    os.close(fd)
+    temp = Path(name)
+    try:
+        writer(temp)
+        with temp.open("rb") as stream:
+            os.fsync(stream.fileno())
+        os.replace(temp, path)
+        directory_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    finally:
+        temp.unlink(missing_ok=True)
+
+
+def write_json_atomic(path: Path, payload: dict) -> None:
+    _atomic(
+        path,
+        lambda temp: temp.write_text(
+            json.dumps(payload, sort_keys=True, allow_nan=False) + "\n",
+            encoding="utf-8",
+        ),
+    )
+
+
+def write_parquet_atomic(path: Path, rows: list[dict], schema: pa.Schema) -> None:
+    def write(temp):
+        pq.write_table(
+            pa.Table.from_pylist(rows, schema=schema),
+            temp,
+            compression="zstd",
+            compression_level=3,
+            version="2.6",
+            data_page_version="1.0",
+            use_dictionary=True,
+            write_statistics=True,
+            row_group_size=65536,
+        )
+        # /path/to/grvt-data's setgid directories supply the consumer group. Atomic
+        # mkstemp defaults to 0600, so grant group access before replacement.
+        temp.chmod(0o660)
+
+    _atomic(path, write)
+
+
+# Each frame is independently zlib-compressed: uint32 length, uint32 CRC32,
+# then that many compressed bytes. A damaged tail never hides prior frames.
+_FRAME = struct.Struct(">II")
+MAX_FRAME_BYTES = 64 * 1024**2
+
+
+def utc_day(received_ns: int) -> date:
+    return datetime.fromtimestamp(received_ns // 1_000_000_000, UTC).date()
+
+
+def _read_frame(stream):
+    header = stream.read(_FRAME.size)
+    if not header:
+        return None
+    if len(header) != _FRAME.size:
+        raise ValueError("truncated frame header")
+    size, crc = _FRAME.unpack(header)
+    if not 0 < size <= MAX_FRAME_BYTES:
+        raise ValueError("invalid frame length")
+    payload = stream.read(size)
+    if len(payload) != size or zlib.crc32(payload) != crc:
+        raise ValueError("truncated or CRC-invalid frame")
+    decoder = zlib.decompressobj()
+    decoded = decoder.decompress(payload, MAX_FRAME_BYTES + 1)
+    if len(decoded) > MAX_FRAME_BYTES or not decoder.eof or decoder.unused_data:
+        raise ValueError("invalid compressed frame")
+    row = json.loads(decoded)
+    if not isinstance(row, dict):
+        raise ValueError("frame must contain an object")  # noqa: TRY004 -- corrupt wire format
+    return row
+
+
+def read_segment(path: Path) -> Iterator[dict]:
+    """Strict streaming reader for closed segments; corrupt data raises."""
+    with path.open("rb") as stream:
+        while (row := _read_frame(stream)) is not None:
+            yield row
+
+
+def _fsync_dir(path: Path):
+    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+@dataclass(frozen=True)
+class RotateReceipt:
+    cutoff_received_ns: int
+    checkpoints: dict[str, dict]
+    closed_segments: list[str]
+    cutoff_receipt_index: int = 0
+    partition_clock: str = "received_ns"
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+class _RecoveryBounds:
+    """Last durable applied state per instrument, ordered by operation index.
+
+    Raw/control/peer frames cannot advance an instrument's outage start. True
+    wall-clock samples may regress; coverage bounds widen conservatively while
+    the original last-update samples and indices remain intact.
+    """
+
+    def __init__(self):
+        self.instruments = {}
+        self.last_ns = None
+        self.last_index = None
+        self.clock_rollback = False
+        self.receipt_order_uncertain = False
+
+    def observe(self, row):
+        now, index = row.get("received_ns"), row.get("receipt_index")
+        if now is not None:
+            if self.last_ns is not None and now < self.last_ns:
+                self.clock_rollback = True
+            self.last_ns = now
+        if index is not None:
+            if self.last_index is not None and index < self.last_index:
+                self.receipt_order_uncertain = True
+            self.last_index = index
+        if row.get("type") == "checkpoint":
+            for instrument, book in row.get("checkpoints", {}).items():
+                pending = book.get("pending_outage")
+                state = (
+                    dict(pending)
+                    if pending
+                    else {
+                        "session_id": book.get("session_id"),
+                        "start_received_ns": book.get("last_update_received_ns"),
+                        "start_receipt_index": book.get("last_update_receipt_index"),
+                    }
+                )
+                state["_coverage_min"] = state.get(
+                    "coverage_start_received_ns", state["start_received_ns"]
+                )
+                self.instruments[instrument] = state
+                self.receipt_order_uncertain |= state.get(
+                    "receipt_order_uncertain", False
+                )
+                if state.get("clock_rollback") or (
+                    now is not None
+                    and state["start_received_ns"] is not None
+                    and now < state["start_received_ns"]
+                ):
+                    self.clock_rollback = True
+        instrument = row.get("instrument")
+        if instrument is not None:
+            state = self.instruments.setdefault(
+                instrument,
+                {
+                    "session_id": None,
+                    "start_received_ns": None,
+                    "start_receipt_index": None,
+                    "_coverage_min": None,
+                },
+            )
+            if row.get("type") in ("snapshot", "delta"):
+                prior_index = state.get("start_receipt_index")
+                if index is None or prior_index is None or index > prior_index:
+                    self.instruments[instrument] = {
+                        "session_id": row.get("session_id"),
+                        "start_received_ns": now,
+                        "start_receipt_index": index,
+                        "_coverage_min": now,
+                    }
+                else:
+                    self.receipt_order_uncertain = True
+            elif row.get("type") == "outage" and row.get("end_received_ns") is None:
+                state.update(row)
+                self.clock_rollback |= row.get("clock_rollback", False)
+                self.receipt_order_uncertain |= row.get(
+                    "receipt_order_uncertain", False
+                )
+                state["_coverage_min"] = row.get(
+                    "coverage_start_received_ns", row.get("start_received_ns")
+                )
+        # Later samples may widen coverage under rollback, but never replace a
+        # last-valid-update timestamp or its operation index.
+        if now is not None:
+            for state in self.instruments.values():
+                if state["_coverage_min"] is not None:
+                    state["_coverage_min"] = min(state["_coverage_min"], now)
+
+    def outages(self, received_ns, segment, discarded_bytes):
+        self.observe({"received_ns": received_ns})
+        result = {}
+        for instrument, state in self.instruments.items():
+            result[instrument] = {
+                "type": "outage",
+                "reason": "crash_recovery",
+                "instrument": instrument,
+                "session_id": state.get("session_id"),
+                "received_ns": received_ns,
+                "start_received_ns": state["start_received_ns"],
+                "start_receipt_index": state.get("start_receipt_index"),
+                "end_received_ns": None,
+                "end_receipt_index": None,
+                "clock_rollback": self.clock_rollback,
+                "receipt_order_uncertain": self.receipt_order_uncertain,
+                "coverage_start_received_ns": state["_coverage_min"],
+                "segment": segment,
+                "discarded_bytes": discarded_bytes,
+            }
+            if state.get("reason"):
+                result[instrument]["preceding_reason"] = state["reason"]
+        return result
+
+
+class SegmentWriter:
+    """Single-owner writer. Call only in the collector's serialized apply loop.
+
+    Raw envelopes and normalized events share the same ordered segment. Every
+    append fsyncs, including the raw record before normalization is attempted.
+    Publishers must enumerate *.frames only, never *.open.
+    """
+
+    def __init__(self, data_dir: Path, dataset: str):
+        if not dataset or Path(dataset).name != dataset:
+            raise ValueError("dataset must be a path component")
+        self.data_dir = Path(data_dir)
+        self.dataset = dataset
+        self.root = self.data_dir / "raw" / dataset
+        self.root.mkdir(parents=True, exist_ok=True)
+        _fsync_dir(self.root.parent)
+        _fsync_dir(self.data_dir)
+        self._stream = None
+        self._path = None
+        self._day = None
+        self._checkpoints = dict
+        self.receipt_index = 0
+
+    def set_checkpoints(self, checkpoints):
+        self._checkpoints = (
+            checkpoints if callable(checkpoints) else lambda: checkpoints
+        )
+
+    def _write(self, row):
+        payload = json.dumps(row, separators=(",", ":"), allow_nan=False).encode()
+        if len(payload) > MAX_FRAME_BYTES:
+            raise ValueError("frame exceeds maximum size")
+        payload = zlib.compress(payload)
+        if len(payload) > MAX_FRAME_BYTES:
+            raise ValueError("compressed frame exceeds maximum size")
+        self._stream.write(_FRAME.pack(len(payload), zlib.crc32(payload)))
+        self._stream.write(payload)
+        self.flush()
+
+    def append(self, row: dict) -> None:
+        received_ns = row["received_ns"]
+        day = utc_day(received_ns)
+        if self._day is not None and day != self._day:
+            self.close()
+        if self._stream is None:
+            directory = self.root / day.isoformat()
+            directory.mkdir(parents=True, exist_ok=True)
+            self._path = directory / f"{received_ns}-{uuid.uuid4().hex}.open"
+            self._stream = self._path.open("xb")
+            self._day = day
+            self._write(
+                {
+                    "type": "checkpoint",
+                    "received_ns": received_ns,
+                    "checkpoints": self._checkpoints(),
+                    "receipt_index": self.receipt_index,
+                    "partition_clock": "received_ns",
+                }
+            )
+            _fsync_dir(directory)
+            _fsync_dir(self.root)
+        self._write(row)
+
+    def flush(self):
+        if self._stream is not None:
+            self._stream.flush()
+            os.fsync(self._stream.fileno())
+
+    def close(self) -> list[str]:
+        if self._stream is None:
+            return []
+        self.flush()
+        self._stream.close()
+        closed = self._path.with_suffix(".frames")
+        os.replace(self._path, closed)
+        _fsync_dir(closed.parent)
+        self._stream = self._path = self._day = None
+        return [str(closed.relative_to(self.data_dir))]
+
+    def abort(self):
+        """Close the descriptor without sealing (also useful to simulate a crash)."""
+        if self._stream is not None:
+            self._stream.close()
+        self._stream = self._path = self._day = None
+
+    def close_day(self, day: date) -> None:
+        if self._day == day:
+            self.close()
+
+    def rotate_now(self) -> RotateReceipt:
+        # No await or concurrent book mutation can occur during this operation.
+        closed = self.close()
+        cutoff = time.time_ns()
+        receipt = RotateReceipt(cutoff, self._checkpoints(), closed, self.receipt_index)
+        write_json_atomic(
+            self.data_dir / "state" / f"{self.dataset}-checkpoint.json",
+            receipt.to_dict(),
+        )
+        return receipt
+
+    def recover(self) -> list[dict]:
+        if self._stream is not None:
+            raise RuntimeError("recover before appending")
+        outages = []
+        for path in sorted(self.root.rglob("*.open")):
+            good = 0
+            bounds = _RecoveryBounds()
+            with path.open("r+b") as stream:
+                while True:
+                    try:
+                        row = _read_frame(stream)
+                        if row is None:
+                            break
+                        bounds.observe(row)
+                        good = stream.tell()
+                    except (ValueError, zlib.error, UnicodeError):
+                        break
+                discarded = path.stat().st_size - good
+                now = time.time_ns()
+                segment = str(path.relative_to(self.data_dir))
+                instrument_outages = bounds.outages(now, segment, discarded)
+                starts = [o["start_received_ns"] for o in instrument_outages.values()]
+                outage = {
+                    "type": "outage",
+                    "reason": "crash_recovery",
+                    "received_ns": now,
+                    # Aggregate bound is only a conservative summary. Consumers
+                    # must use instrument_outages for each instrument's coverage.
+                    "start_received_ns": min(starts)
+                    if starts and None not in starts
+                    else None,
+                    "end_received_ns": None,
+                    "instruments": sorted(instrument_outages),
+                    "instrument_outages": instrument_outages,
+                    "clock_rollback": bounds.clock_rollback,
+                    "receipt_order_uncertain": bounds.receipt_order_uncertain,
+                    "segment": segment,
+                    "discarded_bytes": discarded,
+                }
+                # Journal BEFORE truncation/rename. If recovery itself crashed,
+                # retain the original discarded-tail evidence on the next retry.
+                journal = self.data_dir / "state" / "outages" / f"{path.stem}.json"
+                if journal.exists():
+                    prior = json.loads(journal.read_text())
+                    if prior["discarded_bytes"] >= discarded:
+                        if "instrument_outages" in prior:
+                            outage = prior
+                        else:
+                            # Upgrade legacy journals without losing the original
+                            # discarded-tail evidence or recovery clock sample.
+                            outage["discarded_bytes"] = prior["discarded_bytes"]
+                            outage["received_ns"] = prior["received_ns"]
+                            for pending in instrument_outages.values():
+                                pending["discarded_bytes"] = prior["discarded_bytes"]
+                write_json_atomic(journal, outage)
+                stream.truncate(good)
+                stream.flush()
+                os.fsync(stream.fileno())
+            if good:
+                os.replace(path, path.with_suffix(".frames"))
+            else:
+                path.unlink()
+            _fsync_dir(path.parent)
+            outages.append(outage)
+        return outages
+
+
+def disk_status(data_dir: Path, config: Config | None = None) -> dict:
+    config = config or Config()
+    usage = shutil.disk_usage(data_dir)
+    fraction = usage.free / usage.total
+    tier = "healthy"
+    if fraction < config.warn_free_pct:
+        tier = "warning"
+    if usage.free < max(
+        usage.total * config.critical_free_pct, config.critical_free_bytes
+    ):
+        tier = "critical"
+    if usage.free < config.hard_stop_free_bytes:
+        tier = "hard_stop"
+    return {
+        "tier": tier,
+        "free_bytes": usage.free,
+        "total_bytes": usage.total,
+        "free_fraction": fraction,
+        "pause_universe_growth": tier in ("critical", "hard_stop"),
+        "cleanup_requested": tier in ("critical", "hard_stop"),
+    }
+
+
+def backoff_seconds(attempt: int) -> int:
+    return min(2 ** min(max(attempt, 0), 9), 300)
+
+
+def write_pause(data_dir: Path, reason: str) -> dict:
+    path = data_dir / "state" / "depth-pause.json"
+    previous = json.loads(path.read_text()) if path.exists() else {}
+    attempt = previous.get("attempt", -1) + 1
+    marker = {
+        "reason": reason,
+        "attempt": attempt,
+        "retry_after_ns": time.time_ns() + backoff_seconds(attempt) * 1_000_000_000,
+    }
+    write_json_atomic(path, marker)
+    return marker
+
+
+# Publication helpers deliberately take no global lock. The CLI owns exclusion
+# across its parent and inherited worker descriptors.
+def publication_db(config_or_data_dir):
+    """Open the single WAL/FULL publication ledger (caller closes connection)."""
+    import sqlite3
+
+    root = Path(getattr(config_or_data_dir, "data_dir", config_or_data_dir))
+    path = root / "state" / "publication.sqlite"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    db = sqlite3.connect(path, timeout=30)
+    db.row_factory = sqlite3.Row
+    db.execute("PRAGMA journal_mode=WAL")
+    db.execute("PRAGMA synchronous=FULL")
+    db.execute("PRAGMA foreign_keys=ON")
+    db.executescript("""
+        CREATE TABLE IF NOT EXISTS revisions (
+            day TEXT NOT NULL, revision INTEGER NOT NULL,
+            status TEXT NOT NULL CHECK(status IN ('sealing','sealed','committed')),
+            request_json TEXT NOT NULL, manifest_json TEXT, journal_json TEXT,
+            remote_verified INTEGER NOT NULL DEFAULT 0,
+            commit_attempted INTEGER NOT NULL DEFAULT 0,
+            pruned INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY(day, revision)
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS one_unfinished_revision
+            ON revisions(day) WHERE status != 'committed';
+        CREATE TABLE IF NOT EXISTS segments (
+            identity TEXT PRIMARY KEY, day TEXT NOT NULL, revision INTEGER NOT NULL,
+            normalized_json TEXT,
+            FOREIGN KEY(day,revision) REFERENCES revisions(day,revision)
+        );
+        CREATE TABLE IF NOT EXISTS parts (
+            day TEXT NOT NULL, revision INTEGER NOT NULL, name TEXT NOT NULL,
+            record_json TEXT NOT NULL, remote_id INTEGER, verified INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY(day,revision,name),
+            FOREIGN KEY(day,revision) REFERENCES revisions(day,revision)
+        );
+        CREATE TABLE IF NOT EXISTS per_date_runs (
+            day TEXT NOT NULL, attempt_id INTEGER NOT NULL,
+            status TEXT NOT NULL CHECK(status IN
+                ('running','completed','failed','deadline_exceeded','interrupted')),
+            started_at_ns INTEGER NOT NULL, ended_at_ns INTEGER, error TEXT,
+            PRIMARY KEY(day,attempt_id)
+        );
+    """)
+    if "commit_attempted" not in {
+        row[1] for row in db.execute("PRAGMA table_info(revisions)")
+    }:
+        with db:
+            db.execute(
+                "ALTER TABLE revisions ADD COLUMN commit_attempted INTEGER NOT NULL DEFAULT 0"
+            )
+    return db
+
+
+def start_date_run(config_or_data_dir, day: date) -> int:
+    db = publication_db(config_or_data_dir)
+    try:
+        with db:
+            db.execute("BEGIN IMMEDIATE")
+            attempt = db.execute(
+                "SELECT coalesce(max(attempt_id),0)+1 FROM per_date_runs WHERE day=?",
+                (day.isoformat(),),
+            ).fetchone()[0]
+            db.execute(
+                "INSERT INTO per_date_runs VALUES (?,?, 'running',?,NULL,NULL)",
+                (day.isoformat(), attempt, time.time_ns()),
+            )
+        return attempt
+    finally:
+        db.close()
+
+
+def finish_date_run(
+    config_or_data_dir,
+    day: date,
+    attempt_id: int,
+    status: str,
+    error: str | None = None,
+) -> None:
+    if status not in {"completed", "failed", "deadline_exceeded", "interrupted"}:
+        raise ValueError("invalid terminal attempt status")
+    db = publication_db(config_or_data_dir)
+    try:
+        with db:
+            changed = db.execute(
+                "UPDATE per_date_runs SET status=?,ended_at_ns=?,error=? "
+                "WHERE day=? AND attempt_id=? AND status='running'",
+                (status, time.time_ns(), error, day.isoformat(), attempt_id),
+            ).rowcount
+            if changed != 1:
+                raise ValueError("no running attempt")
+    finally:
+        db.close()
+
+
+def recover_date_runs(config_or_data_dir) -> set[date]:
+    """Call only AFTER acquiring global lock; all previous writers are gone."""
+    db = publication_db(config_or_data_dir)
+    try:
+        with db:
+            days = {
+                date.fromisoformat(row[0])
+                for row in db.execute(
+                    "SELECT DISTINCT day FROM per_date_runs WHERE status='running'"
+                )
+            }
+            db.execute(
+                "UPDATE per_date_runs SET status='interrupted',ended_at_ns=?,"
+                "error='recovered after exclusive publication lock acquisition' "
+                "WHERE status='running'",
+                (time.time_ns(),),
+            )
+        return days
+    finally:
+        db.close()
