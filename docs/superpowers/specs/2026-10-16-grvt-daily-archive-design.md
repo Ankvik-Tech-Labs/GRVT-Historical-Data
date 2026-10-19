@@ -47,7 +47,7 @@ supersedes the historical mixed tick/depth design below where they conflict.
 | Revision recovery | Dataset scope is frozen per revision; resume previously sealed bytes in their original mode |
 | Current-day proof | Tick-only explicit UTC exchange-time bound, 30-second query-start grace, no depth receipt/rotation; provisional coverage queues a later full-day download |
 | Scheduling | Host cron at 00:30 UTC; local status every five minutes; user-owned logrotate at 00:45 UTC with weekly/eight/compressed policy |
-| Publication access | Private repository, published/non-draft releases accessible to authorized readers; no visibility change |
+| Publication access | Public repository; published/non-draft releases are anonymously downloadable |
 | Credentials | Existing host `gh` authentication only; none copied into `/srv/grvt`, Git, evidence, or a container |
 
 The public CLI uses `--datasets trades` by default and `/srv/grvt` as its data
@@ -104,14 +104,14 @@ Requested: inspect the Apex historical-data setup, collect GRVT trades/ticks and
 
 **Design status: approved by the user on 2026-10-16; implementation and bounded production proof performed.** Deployment on vitalik8 measured 61 minutes of all 184 perpetuals and failed the storage gate: the required three raw days alone exceed half the data root's available space. Cron remains uninstalled and continuous collection is paused after the bounded proof. Additional assigned storage and a fresh gate are required before unattended activation. The inspection table below records the earlier planning snapshot; verified operation is documented in README and the Traycer `grvt-deployment` artifact.
 
-“Public” in the publication state machine means **published/non-draft (`draft=false`)**. The repository stays private and releases require authorized access. Publication, body-pointer, hash-verification and cleanup predicates are unchanged.
+“Public” in the publication state machine means **published/non-draft (`draft=false`)**. The repository is public, so published assets are anonymously downloadable; drafts remain unpublished. Publication, body-pointer, hash-verification and cleanup predicates are unchanged.
 
 ## Inspection evidence — 2026-10-16 UTC
 
 | Check | Result |
 |---|---|
 | Execution host | Local hostname is `vitalik8`; Traycer also lists it as connected |
-| Destination | `Ankvik-Tech-Labs/GRVT-Historical-Data`, private, default branch `main`; authenticated account has push/admin access |
+| Destination | `Ankvik-Tech-Labs/GRVT-Historical-Data`, public, default branch `main`; authenticated account has push/admin access |
 | Existing GRVT implementation | Only `README.md`, initial commit `060a7ed` |
 | Apex reference revision | GitHub HEAD `c1602f057b22b68caebde8109c269fcdc769143e` |
 | Apex server configuration | Docker Compose defines continuous trades and depth services with persistent storage and restart policies |

@@ -12,7 +12,7 @@ PUBLIC_DATASETS = ("trades", "ohlcv", "funding", "ticker", "metadata", "ohlcv_ex
 @dataclass(frozen=True)
 class Config:
     data_dir: Path = Path("data")
-    repo: str = "Aviksaikat/GRVT-Historical-Data"
+    repo: str = "Ankvik-Tech-Labs/GRVT-Historical-Data"
     rest_url: str = "https://market-data.grvt.io"
     ws_url: str = "wss://market-data.grvt.io/ws/full"
     depth_rate_ms: int = 100

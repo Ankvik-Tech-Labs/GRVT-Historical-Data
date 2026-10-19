@@ -100,7 +100,7 @@ The existing trades/OHLCV parts remain included. Source paths, sizes, hashes,
 coverage clocks and exact query evidence are frozen before sealing is journaled;
 resuming a revision never rereads later mutable canonical corrections. Every new
 asset is remotely hash-verified before the public/non-draft release body points
-to its manifest. Previous assets are not overwritten. The repository stays private.
+to its manifest. Previous assets are not overwritten. The repository is public; published GitHub release assets are anonymously downloadable.
 
 Verified transient staging and eligible tick pages are pruned after publication;
 canonical files, market raw pages and progress remain local. Raw evidence is

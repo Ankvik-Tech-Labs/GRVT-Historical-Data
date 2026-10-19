@@ -10,8 +10,8 @@ The October 18 expansion is described in [public dataset contracts](docs/grvt-pu
 Historical funding/candles continue from durable cursors; ticker/reference data
 are current observations with explicit timestamps, not fabricated past snapshots.
 
-The repository is private. Published/non-draft releases require authorized
-repository access; `draft=false` does not change repository visibility.
+The repository is public. Published/non-draft release assets are anonymously
+downloadable; drafts remain unpublished.
 
 ## Current deployment
 
